@@ -21,9 +21,14 @@ dependencies = [
     "matplotlib==3.7.5",
     "omegaconf==2.3.0",
     "pretty_errors==1.2.25",
+    "pygame>=2.6.1",
+    "pymunk>=6.11.1",
+    "scikit-image>=0.21.0",
+    "shapely>=2.0.7",
     "torch==2.4.0",
     "tqdm==4.66.5",
-    "wandb==0.17.7"
+    "wandb==0.17.7",
+    "zarr>=2.16.1",
 ]
 
 [project.optional-dependencies]
