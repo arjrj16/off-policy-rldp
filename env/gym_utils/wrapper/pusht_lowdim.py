@@ -12,7 +12,6 @@ For consistency, we will use Dict{} for the observation space, with the key "sta
 import numpy as np
 import gym
 from gym import spaces
-import imageio
 
 
 class PushTLowdimWrapper(gym.Env):
@@ -29,20 +28,22 @@ class PushTLowdimWrapper(gym.Env):
         # setup spaces
         self.action_space = env.action_space
         normalization = np.load(normalization_path)
-        self.obs_min = normalization["obs_min"]
-        self.obs_max = normalization["obs_max"]
-        self.action_min = normalization["action_min"]
-        self.action_max = normalization["action_max"]
+        self.obs_min = normalization["obs_min"].astype(np.float32)
+        self.obs_max = normalization["obs_max"].astype(np.float32)
+        self.action_min = normalization["action_min"].astype(np.float32)
+        self.action_max = normalization["action_max"].astype(np.float32)
 
+        # Get obs shape from a reset (Push-T returns (obs, info) tuple)
+        obs_example, _ = self.env.reset()
+        obs_dim = obs_example.shape[0]
+        
+        # Use float32 to match the dummy_env_fn in make_async
         self.observation_space = spaces.Dict()
-        obs_example, _ = self.env.reset()  # Push-T returns (obs, info) tuple
-        low = np.full_like(obs_example, fill_value=-1)
-        high = np.full_like(obs_example, fill_value=1)
         self.observation_space["state"] = spaces.Box(
-            low=low,
-            high=high,
-            shape=low.shape,
-            dtype=low.dtype,
+            low=-1.0,
+            high=1.0,
+            shape=(obs_dim,),
+            dtype=np.float32,
         )
 
     def seed(self, seed=None):
@@ -52,8 +53,11 @@ class PushTLowdimWrapper(gym.Env):
         else:
             np.random.seed()
 
-    def reset(self, options={}, **kwargs):
+    def reset(self, options=None, **kwargs):
         """Reset the environment with optional video recording."""
+        if options is None:
+            options = {}
+            
         # Close video if exists
         if self.video_writer is not None:
             self.video_writer.close()
@@ -61,6 +65,7 @@ class PushTLowdimWrapper(gym.Env):
 
         # Start video if specified
         if "video_path" in options:
+            import imageio
             self.video_writer = imageio.get_writer(options["video_path"], fps=10)
 
         # Handle seed
@@ -70,8 +75,8 @@ class PushTLowdimWrapper(gym.Env):
         
         raw_obs, info = self.env.reset()
 
-        # normalize
-        obs = self.normalize_obs(raw_obs)
+        # normalize and convert to float32
+        obs = self.normalize_obs(raw_obs).astype(np.float32)
         
         # Record first frame if video is being recorded
         if self.video_writer is not None:
@@ -81,6 +86,7 @@ class PushTLowdimWrapper(gym.Env):
         return {"state": obs}
 
     def normalize_obs(self, obs):
+        obs = obs.astype(np.float32)
         return 2 * ((obs - self.obs_min) / (self.obs_max - self.obs_min + 1e-6) - 0.5)
 
     def unnormalize_action(self, action):
@@ -92,8 +98,8 @@ class PushTLowdimWrapper(gym.Env):
         # Push-T uses new gym API: (obs, reward, terminated, truncated, info)
         raw_obs, reward, terminated, truncated, info = self.env.step(raw_action)
 
-        # normalize
-        obs = self.normalize_obs(raw_obs)
+        # normalize and convert to float32
+        obs = self.normalize_obs(raw_obs).astype(np.float32)
 
         # Record frame if video is being recorded
         if self.video_writer is not None:
