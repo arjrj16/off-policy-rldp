@@ -64,6 +64,10 @@ export MUJOCO_GL=egl
 # uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 #     --config-dir=cfg/robomimic/finetune/transport 
 
-# Option 7: push-t
-uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+# # Option 7: push-t - IDQL
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+#     --config-dir=cfg/pusht/finetune
+
+# # Option 8: push-t - DPPO
+uv run python script/run.py --config-name=ft_ppo_diffusion_mlp \
     --config-dir=cfg/pusht/finetune

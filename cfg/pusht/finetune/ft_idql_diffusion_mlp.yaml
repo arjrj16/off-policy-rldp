@@ -63,7 +63,7 @@ train:
   save_model_freq: 50
   val_freq: 10
   render:
-    freq: 100  # Record video every 100 iterations
+    freq: 50  # Record video every 100 iterations
     num: 1     # Record from 1 environment
   # IDQL specific
   scale_reward_factor: 1.0
