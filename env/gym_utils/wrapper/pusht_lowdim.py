@@ -67,6 +67,7 @@ class PushTLowdimWrapper(gym.Env):
         if "video_path" in options:
             import imageio
             self.video_writer = imageio.get_writer(options["video_path"], fps=10)
+            print(f"recorded video to: {options['video_path']}")
 
         # Handle seed
         new_seed = options.get("seed", None)
