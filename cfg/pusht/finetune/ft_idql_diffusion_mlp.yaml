@@ -7,9 +7,9 @@ _target_: agent.finetune.train_idql_diffusion_agent.TrainIDQLDiffusionAgent
 
 name: pusht_idql_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/pusht-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/pusht-pretrain/pusht_pre_diffusion_mlp_ta8_td20/2025-11-29_23-48-49_42/checkpoint/state_200.pt
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/pusht-pretrain/pusht_pre_diffusion_mlp_ta8_td20/2025-11-29_23-48-49_42/checkpoint/state_200.pt
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/pusht-pretrain/pusht_pre_diffusion_mlp_ta8_td20/2025-11-30_12-46-05_42/checkpoint/state_3000.pt
 normalization_path: ${oc.env:DPPO_DATA_DIR}/pusht/normalization.npz
-
 seed: 42
 device: cuda:0
 env_name: pusht
@@ -17,8 +17,8 @@ obs_dim: 5
 action_dim: 2
 denoising_steps: 20
 cond_steps: 2
-horizon_steps: 16  # Match pretrain config
-act_steps: 8       # Execute first 8 of 16 predicted actions
+horizon_steps: 8
+act_steps: 8
 
 env:
   n_envs: 20
@@ -87,7 +87,7 @@ model:
     horizon_steps: ${horizon_steps}
     action_dim: ${action_dim}
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
-    time_dim: 16
+    time_dim: 32
     mlp_dims: [512, 512, 512]
     activation_type: ReLU
     residual_style: True
