@@ -19,6 +19,8 @@ denoising_steps: 20
 cond_steps: 2
 horizon_steps: 8
 act_steps: 8
+n_steps: 300
+render_num: 3
 
 env:
   n_envs: 10
@@ -26,9 +28,11 @@ env:
   env_type: pusht
   max_episode_steps: 300
   save_video: True
+  best_reward_threshold_for_success: 0.95
   wrappers:
     pusht_lowdim:
       normalization_path: ${normalization_path}
+      render_hw: [256, 256]
     multi_step:
       n_obs_steps: ${cond_steps}
       n_action_steps: ${act_steps}
@@ -40,3 +44,24 @@ eval:
   render: True
   deterministic: True
 
+model:
+  _target_: model.diffusion.diffusion.DiffusionModel
+  predict_epsilon: True
+  denoised_clip_value: 1.0
+  network:
+    _target_: model.diffusion.mlp_diffusion.DiffusionMLP
+    horizon_steps: ${horizon_steps}
+    action_dim: ${action_dim}
+    cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
+    time_dim: 32
+    mlp_dims: [256, 256, 256]
+    activation_type: ReLU
+    out_activation_type: Identity
+    use_layernorm: False
+    residual_style: True
+  horizon_steps: ${horizon_steps}
+  obs_dim: ${obs_dim}
+  action_dim: ${action_dim}
+  denoising_steps: ${denoising_steps}
+  device: ${device}
+  network_path: ${checkpoint_path}

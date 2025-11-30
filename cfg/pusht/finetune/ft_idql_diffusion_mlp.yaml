@@ -7,7 +7,7 @@ _target_: agent.finetune.train_idql_diffusion_agent.TrainIDQLDiffusionAgent
 
 name: pusht_idql_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/pusht-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/pusht-pretrain/pusht_pre_diffusion_mlp_ta8_td20/2025-11-29_23-48-49_42/checkpoint/state_200.pt
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/pusht-pretrain/pusht_pre_diffusion_mlp_ta8_td20/REPLACE_WITH_DATE/checkpoint/state_200.pt
 normalization_path: ${oc.env:DPPO_DATA_DIR}/pusht/normalization.npz
 
 seed: 42
@@ -26,11 +26,12 @@ env:
   env_type: pusht
   max_episode_steps: 300
   reset_at_iteration: False
-  save_video: False
+  save_video: True  # Enable video recording during eval
   best_reward_threshold_for_success: 0.95
   wrappers:
     pusht_lowdim:
       normalization_path: ${normalization_path}
+      render_hw: [256, 256]
     multi_step:
       n_obs_steps: ${cond_steps}
       n_action_steps: ${act_steps}
@@ -62,8 +63,8 @@ train:
   save_model_freq: 50
   val_freq: 10
   render:
-    freq: 1
-    num: 0
+    freq: 100  # Record video every 100 iterations
+    num: 1     # Record from 1 environment
   # IDQL specific
   scale_reward_factor: 1.0
   eval_deterministic: True

@@ -12,6 +12,7 @@ For consistency, we will use Dict{} for the observation space, with the key "sta
 import numpy as np
 import gym
 from gym import spaces
+import imageio
 
 
 class PushTLowdimWrapper(gym.Env):
@@ -19,8 +20,11 @@ class PushTLowdimWrapper(gym.Env):
         self,
         env,
         normalization_path,
+        render_hw=(256, 256),
     ):
         self.env = env
+        self.render_hw = render_hw
+        self.video_writer = None
 
         # setup spaces
         self.action_space = env.action_space
@@ -48,16 +52,32 @@ class PushTLowdimWrapper(gym.Env):
         else:
             np.random.seed()
 
-    def reset(self, **kwargs):
-        """Ignore passed-in arguments like seed"""
-        options = kwargs.get("options", {})
+    def reset(self, options={}, **kwargs):
+        """Reset the environment with optional video recording."""
+        # Close video if exists
+        if self.video_writer is not None:
+            self.video_writer.close()
+            self.video_writer = None
+
+        # Start video if specified
+        if "video_path" in options:
+            self.video_writer = imageio.get_writer(options["video_path"], fps=10)
+
+        # Handle seed
         new_seed = options.get("seed", None)
         if new_seed is not None:
             self.seed(seed=new_seed)
+        
         raw_obs, info = self.env.reset()
 
         # normalize
         obs = self.normalize_obs(raw_obs)
+        
+        # Record first frame if video is being recorded
+        if self.video_writer is not None:
+            video_img = self.render(mode="rgb_array")
+            self.video_writer.append_data(video_img)
+
         return {"state": obs}
 
     def normalize_obs(self, obs):
@@ -74,13 +94,27 @@ class PushTLowdimWrapper(gym.Env):
 
         # normalize
         obs = self.normalize_obs(raw_obs)
+
+        # Record frame if video is being recorded
+        if self.video_writer is not None:
+            video_img = self.render(mode="rgb_array")
+            self.video_writer.append_data(video_img)
+
         # Return old gym API format (obs, reward, done, info) for compatibility
         done = terminated or truncated
         return {"state": obs}, reward, done, info
 
     def render(self, mode="rgb_array"):
-        return self.env.render(mode=mode)
+        img = self.env.render(mode=mode)
+        # Resize if needed
+        if img is not None and self.render_hw is not None:
+            import cv2
+            h, w = self.render_hw
+            img = cv2.resize(img, (w, h))
+        return img
 
     def close(self):
+        if self.video_writer is not None:
+            self.video_writer.close()
+            self.video_writer = None
         return self.env.close()
-
