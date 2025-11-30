@@ -126,6 +126,8 @@ def make_async(
         import robomimic.utils.obs_utils as ObsUtils
     elif "avoiding" in id:
         import gym_avoiding
+    elif env_type == "pusht":
+        pass  # Push-T env will be created directly, not via gym.make
     else:
         import d4rl.gym_mujoco
     from gym.envs import make as make_
@@ -164,6 +166,13 @@ def make_async(
             # Disabled to run more envs.
             # https://github.com/ARISE-Initiative/robosuite/blob/92abf5595eddb3a845cd1093703e5a3ccd01e77e/robosuite/environments/base.py#L247-L248
             env.env.hard_reset = False
+        elif env_type == "pusht":
+            # Import and create Push-T environment
+            from env.pusht.pusht_env import PushTEnv
+            env = PushTEnv(
+                render_size=kwargs.get("render_size", 96),
+                render_action=kwargs.get("render_action", True),
+            )
         else:  # d3il, gym
             if "kitchen" not in id:  # d4rl kitchen does not support rendering!
                 kwargs["render"] = render
