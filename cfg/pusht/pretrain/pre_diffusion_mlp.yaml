@@ -15,7 +15,7 @@ env: pusht
 obs_dim: 5  # agent_x, agent_y, block_x, block_y, block_angle
 action_dim: 2  # target_agent_x, target_agent_y
 denoising_steps: 20
-horizon_steps: 8  # predict 8 action steps
+horizon_steps: 16  # Diffusion Policy paper uses 16 for Push-T
 cond_steps: 2  # condition on 2 observation steps
 
 wandb:
@@ -24,15 +24,15 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 train:
-  n_epochs: 200
+  n_epochs: 3000  # Match robomimic - much more training!
   batch_size: 256
   learning_rate: 1e-4
   weight_decay: 1e-6
   lr_scheduler:
-    first_cycle_steps: 200
-    warmup_steps: 5
+    first_cycle_steps: 3000
+    warmup_steps: 100
     min_lr: 1e-5
-  save_model_freq: 50
+  save_model_freq: 500
 
 model:
   _target_: model.diffusion.diffusion.DiffusionModel
@@ -43,8 +43,8 @@ model:
     horizon_steps: ${horizon_steps}
     action_dim: ${action_dim}
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
-    time_dim: 32
-    mlp_dims: [256, 256, 256]
+    time_dim: 16
+    mlp_dims: [512, 512, 512]  # Larger network to match other configs
     activation_type: ReLU
     out_activation_type: Identity
     use_layernorm: False
@@ -64,4 +64,3 @@ train_dataset:
   horizon_steps: ${horizon_steps}
   cond_steps: ${cond_steps}
   device: ${device}
-

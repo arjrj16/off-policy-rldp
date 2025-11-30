@@ -18,8 +18,8 @@ action_dim: 2
 denoising_steps: 20
 ft_denoising_steps: 10
 cond_steps: 2
-horizon_steps: 8
-act_steps: 8
+horizon_steps: 16  # Match pretrain config
+act_steps: 8       # Execute first 8 of 16 predicted actions
 
 env:
   n_envs: 20
@@ -89,8 +89,8 @@ model:
   network_path: ${base_policy_path}
   actor:
     _target_: model.diffusion.mlp_diffusion.DiffusionMLP
-    time_dim: 32
-    mlp_dims: [256, 256, 256]
+    time_dim: 16
+    mlp_dims: [512, 512, 512]
     activation_type: ReLU
     residual_style: True
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
