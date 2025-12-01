@@ -14,12 +14,14 @@ set -e -o pipefail
 source ~/.bashrc
 
 # Go to DPPO project directory
-cd /home/melwani/67920/paper-gits/dppo
+# cd /home/melwani/67920/paper-gits/dppo
 
 # Set required environment variables
-export DPPO_DATA_DIR=/home/melwani/67920/paper-gits/dppo/data      # where datasets/normalization are stored
-export DPPO_LOG_DIR=/home/melwani/67920/paper-gits/dppo/log        # where checkpoints/logs go
-export DPPO_WANDB_ENTITY=arjunmelwani-massachusetts-institute-of-technology                       # your WandB username (or set wandb=null below)
+# export DPPO_DATA_DIR=/home/melwani/67920/paper-gits/dppo/data      # where datasets/normalization are stored
+# export DPPO_LOG_DIR=/home/melwani/67920/paper-gits/dppo/log        # where checkpoints/logs go
+export DPPO_WANDB_ENTITY=sarahpan888                      # your WandB username (or set wandb=null below)
+export DPPO_DATA_DIR=/home/sarahpan/off-policy-rldp/dppo/data
+export DPPO_LOG_DIR=/home/sarahpan/off-policy-rldp/dppo/log
 # Suppress d4rl import warnings
 export D4RL_SUPPRESS_IMPORT_ERROR=1
 
@@ -69,8 +71,8 @@ export MUJOCO_GL=egl
 #     --config-dir=cfg/pusht/finetune
 
 # # Option 8: push-t - DPPO
-uv run python script/run.py --config-name=ft_ppo_diffusion_mlp \
-    --config-dir=cfg/pusht/finetune
+# uv run python script/run.py --config-name=ft_ppo_diffusion_mlp \
+#     --config-dir=cfg/pusht/finetune
 
 # # Option 9: push-t - pretrain
-# uv run python script/run.py --config-dir=cfg/pusht/pretrain --config-name=pre_diffusion_mlp
+uv run python script/run.py --config-dir=cfg/pusht/pretrain --config-name=pre_diffusion_mlp
