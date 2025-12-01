@@ -71,3 +71,7 @@ export MUJOCO_GL=egl
 # # Option 8: push-t - DPPO
 uv run python script/run.py --config-name=ft_ppo_diffusion_mlp \
     --config-dir=cfg/pusht/finetune
+
+# transport pretrain
+# uv run python script/run.py --config-name=pre_diffusion_mlp \
+#     --config-dir=cfg/robomimic/pretrain/transport

@@ -15,27 +15,34 @@ import numpy as np
 import matplotlib.pyplot as plt
 import argparse
 import os
-from collections import defaultdict
 import json
 
 
 def load_dataset(dataset_path):
     """Load the preprocessed transport dataset."""
     data = np.load(dataset_path, allow_pickle=False)
-    return {
+    
+    # Handle datasets with or without rewards/terminals
+    result = {
         'states': data['states'],
         'actions': data['actions'],
-        'rewards': data['rewards'],
-        'terminals': data['terminals'],
         'traj_lengths': data['traj_lengths'],
     }
+    
+    # Optional fields
+    if 'rewards' in data:
+        result['rewards'] = data['rewards']
+    if 'terminals' in data:
+        result['terminals'] = data['terminals']
+    
+    print(f"Dataset keys: {list(data.keys())}")
+    return result
 
 
 def compute_basic_stats(data):
     """Compute basic statistics about the dataset."""
     states = data['states']
     actions = data['actions']
-    rewards = data['rewards']
     traj_lengths = data['traj_lengths']
     
     stats = {
@@ -55,11 +62,17 @@ def compute_basic_stats(data):
         'action_max': actions.max(axis=0).tolist(),
         'action_mean': actions.mean(axis=0).tolist(),
         'action_std': actions.std(axis=0).tolist(),
-        'reward_sum_per_traj_mean': float(np.mean([rewards[sum(traj_lengths[:i]):sum(traj_lengths[:i+1])].sum() 
-                                                   for i in range(len(traj_lengths))])),
-        'reward_max': float(np.max(rewards)),
-        'reward_min': float(np.min(rewards)),
     }
+    
+    if 'rewards' in data:
+        rewards = data['rewards']
+        stats['reward_sum_per_traj_mean'] = float(np.mean([
+            rewards[sum(traj_lengths[:i]):sum(traj_lengths[:i+1])].sum() 
+            for i in range(len(traj_lengths))
+        ]))
+        stats['reward_max'] = float(np.max(rewards))
+        stats['reward_min'] = float(np.min(rewards))
+    
     return stats
 
 
@@ -71,23 +84,19 @@ def analyze_trajectory_diversity(data):
     # Extract start and end states for each trajectory
     start_states = []
     end_states = []
-    traj_rewards = []
     
     idx = 0
     for length in traj_lengths:
         start_states.append(states[idx])
         end_states.append(states[idx + length - 1])
-        traj_rewards.append(data['rewards'][idx:idx + length].sum())
         idx += length
     
     start_states = np.array(start_states)
     end_states = np.array(end_states)
-    traj_rewards = np.array(traj_rewards)
     
     return {
         'start_states': start_states,
         'end_states': end_states,
-        'traj_rewards': traj_rewards,
         'start_state_std': start_states.std(axis=0),
         'end_state_std': end_states.std(axis=0),
     }
@@ -95,7 +104,6 @@ def analyze_trajectory_diversity(data):
 
 def compute_state_coverage(states, n_bins=50):
     """Estimate state space coverage using histogram-based density."""
-    # For each dimension, compute histogram to estimate density
     coverage_per_dim = []
     for dim in range(states.shape[1]):
         hist, bin_edges = np.histogram(states[:, dim], bins=n_bins)
@@ -103,7 +111,7 @@ def compute_state_coverage(states, n_bins=50):
         coverage = np.sum(hist > 0) / n_bins
         # Also compute entropy as measure of uniformity
         hist_normalized = hist / hist.sum()
-        hist_normalized = hist_normalized[hist_normalized > 0]  # Remove zeros for log
+        hist_normalized = hist_normalized[hist_normalized > 0]
         entropy = -np.sum(hist_normalized * np.log(hist_normalized + 1e-10))
         max_entropy = np.log(n_bins)
         coverage_per_dim.append({
@@ -165,7 +173,6 @@ def analyze_temporal_patterns(data):
 
 def identify_rare_regions(states, actions, percentile=5):
     """Identify states/actions that are visited rarely (in the tail of distribution)."""
-    # Compute per-dimension percentiles
     state_low = np.percentile(states, percentile, axis=0)
     state_high = np.percentile(states, 100 - percentile, axis=0)
     action_low = np.percentile(actions, percentile, axis=0)
@@ -179,7 +186,7 @@ def identify_rare_regions(states, actions, percentile=5):
     }
 
 
-def plot_state_distributions(states, output_dir, state_labels=None):
+def plot_state_distributions(states, output_dir):
     """Plot distribution of each state dimension."""
     n_dims = states.shape[1]
     n_cols = 6
@@ -213,7 +220,6 @@ def plot_state_distributions(states, output_dir, state_labels=None):
         ax.set_xlabel('Value')
         ax.set_ylabel('Density')
     
-    # Hide unused subplots
     for idx in range(n_dims, len(axes)):
         axes[idx].set_visible(False)
     
@@ -253,31 +259,6 @@ def plot_action_distributions(actions, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'action_distributions.png'), dpi=150)
-    plt.close()
-
-
-def plot_trajectory_rewards(traj_rewards, output_dir):
-    """Plot distribution of trajectory rewards."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    
-    # Histogram
-    axes[0].hist(traj_rewards, bins=50, density=True, alpha=0.7)
-    axes[0].set_xlabel('Total Trajectory Reward')
-    axes[0].set_ylabel('Density')
-    axes[0].set_title('Distribution of Trajectory Returns')
-    axes[0].axvline(x=np.mean(traj_rewards), color='r', linestyle='--', 
-                    label=f'Mean: {np.mean(traj_rewards):.2f}')
-    axes[0].legend()
-    
-    # Sorted trajectory rewards
-    sorted_rewards = np.sort(traj_rewards)[::-1]
-    axes[1].plot(sorted_rewards)
-    axes[1].set_xlabel('Trajectory Index (sorted by reward)')
-    axes[1].set_ylabel('Total Trajectory Reward')
-    axes[1].set_title('Trajectory Rewards (Sorted)')
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'trajectory_rewards.png'), dpi=150)
     plt.close()
 
 
@@ -324,102 +305,53 @@ def plot_eef_positions(states, traj_lengths, output_dir):
     plt.close()
 
 
-def plot_successful_vs_failed_trajectories(data, output_dir, success_threshold=0.5):
-    """Compare state distributions between successful and unsuccessful trajectories."""
-    states = data['states']
-    rewards = data['rewards']
-    traj_lengths = data['traj_lengths']
-    
-    if states.shape[1] != 59:
+def plot_trajectory_start_end(data, output_dir):
+    """Plot start vs end positions for each trajectory to see trajectory diversity."""
+    if data['states'].shape[1] != 59:
         return
     
-    # Split trajectories by success
-    successful_states = []
-    failed_states = []
+    diversity = analyze_trajectory_diversity(data)
+    start_states = diversity['start_states']
+    end_states = diversity['end_states']
     
-    idx = 0
-    for length in traj_lengths:
-        traj_reward = rewards[idx:idx + length].sum()
-        traj_states = states[idx:idx + length]
-        
-        if traj_reward >= success_threshold:
-            successful_states.append(traj_states)
-        else:
-            failed_states.append(traj_states)
-        idx += length
-    
-    if len(successful_states) == 0:
-        print("No successful trajectories found!")
-        return
-    
-    successful_states = np.vstack(successful_states) if successful_states else np.array([])
-    failed_states = np.vstack(failed_states) if failed_states else np.array([])
-    
-    print(f"Successful trajectories: {len([s for s in successful_states if len(s) > 0])}")
-    print(f"Failed trajectories: {len([s for s in failed_states if len(s) > 0])}")
-    
-    # Plot EEF comparison
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     
-    # Robot 0 positions
-    if len(successful_states) > 0:
-        axes[0, 0].scatter(successful_states[:, 0], successful_states[:, 1], 
-                          alpha=0.02, s=1, c='green', label='Success')
-    if len(failed_states) > 0:
-        axes[0, 0].scatter(failed_states[:, 0], failed_states[:, 1], 
-                          alpha=0.02, s=1, c='red', label='Failed')
+    # Robot 0
+    axes[0, 0].scatter(start_states[:, 0], start_states[:, 1], alpha=0.5, s=10, c='blue', label='Start')
+    axes[0, 0].scatter(end_states[:, 0], end_states[:, 1], alpha=0.5, s=10, c='red', label='End')
     axes[0, 0].set_xlabel('X'); axes[0, 0].set_ylabel('Y')
-    axes[0, 0].set_title('Robot 0 EEF: XY (Success vs Failed)')
+    axes[0, 0].set_title('Robot 0: Trajectory Start vs End (XY)')
     axes[0, 0].legend()
     
-    if len(successful_states) > 0:
-        axes[0, 1].scatter(successful_states[:, 0], successful_states[:, 2], 
-                          alpha=0.02, s=1, c='green')
-    if len(failed_states) > 0:
-        axes[0, 1].scatter(failed_states[:, 0], failed_states[:, 2], 
-                          alpha=0.02, s=1, c='red')
+    axes[0, 1].scatter(start_states[:, 0], start_states[:, 2], alpha=0.5, s=10, c='blue')
+    axes[0, 1].scatter(end_states[:, 0], end_states[:, 2], alpha=0.5, s=10, c='red')
     axes[0, 1].set_xlabel('X'); axes[0, 1].set_ylabel('Z')
-    axes[0, 1].set_title('Robot 0 EEF: XZ')
+    axes[0, 1].set_title('Robot 0: Trajectory Start vs End (XZ)')
     
-    if len(successful_states) > 0:
-        axes[0, 2].scatter(successful_states[:, 1], successful_states[:, 2], 
-                          alpha=0.02, s=1, c='green')
-    if len(failed_states) > 0:
-        axes[0, 2].scatter(failed_states[:, 1], failed_states[:, 2], 
-                          alpha=0.02, s=1, c='red')
+    axes[0, 2].scatter(start_states[:, 1], start_states[:, 2], alpha=0.5, s=10, c='blue')
+    axes[0, 2].scatter(end_states[:, 1], end_states[:, 2], alpha=0.5, s=10, c='red')
     axes[0, 2].set_xlabel('Y'); axes[0, 2].set_ylabel('Z')
-    axes[0, 2].set_title('Robot 0 EEF: YZ')
+    axes[0, 2].set_title('Robot 0: Trajectory Start vs End (YZ)')
     
-    # Robot 1 positions
-    if len(successful_states) > 0:
-        axes[1, 0].scatter(successful_states[:, 9], successful_states[:, 10], 
-                          alpha=0.02, s=1, c='green', label='Success')
-    if len(failed_states) > 0:
-        axes[1, 0].scatter(failed_states[:, 9], failed_states[:, 10], 
-                          alpha=0.02, s=1, c='red', label='Failed')
+    # Robot 1
+    axes[1, 0].scatter(start_states[:, 9], start_states[:, 10], alpha=0.5, s=10, c='blue', label='Start')
+    axes[1, 0].scatter(end_states[:, 9], end_states[:, 10], alpha=0.5, s=10, c='red', label='End')
     axes[1, 0].set_xlabel('X'); axes[1, 0].set_ylabel('Y')
-    axes[1, 0].set_title('Robot 1 EEF: XY (Success vs Failed)')
+    axes[1, 0].set_title('Robot 1: Trajectory Start vs End (XY)')
+    axes[1, 0].legend()
     
-    if len(successful_states) > 0:
-        axes[1, 1].scatter(successful_states[:, 9], successful_states[:, 11], 
-                          alpha=0.02, s=1, c='green')
-    if len(failed_states) > 0:
-        axes[1, 1].scatter(failed_states[:, 9], failed_states[:, 11], 
-                          alpha=0.02, s=1, c='red')
+    axes[1, 1].scatter(start_states[:, 9], start_states[:, 11], alpha=0.5, s=10, c='blue')
+    axes[1, 1].scatter(end_states[:, 9], end_states[:, 11], alpha=0.5, s=10, c='red')
     axes[1, 1].set_xlabel('X'); axes[1, 1].set_ylabel('Z')
-    axes[1, 1].set_title('Robot 1 EEF: XZ')
+    axes[1, 1].set_title('Robot 1: Trajectory Start vs End (XZ)')
     
-    if len(successful_states) > 0:
-        axes[1, 2].scatter(successful_states[:, 10], successful_states[:, 11], 
-                          alpha=0.02, s=1, c='green')
-    if len(failed_states) > 0:
-        axes[1, 2].scatter(failed_states[:, 10], failed_states[:, 11], 
-                          alpha=0.02, s=1, c='red')
+    axes[1, 2].scatter(start_states[:, 10], start_states[:, 11], alpha=0.5, s=10, c='blue')
+    axes[1, 2].scatter(end_states[:, 10], end_states[:, 11], alpha=0.5, s=10, c='red')
     axes[1, 2].set_xlabel('Y'); axes[1, 2].set_ylabel('Z')
-    axes[1, 2].set_title('Robot 1 EEF: YZ')
+    axes[1, 2].set_title('Robot 1: Trajectory Start vs End (YZ)')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'success_vs_failed_positions.png'), dpi=150)
+    plt.savefig(os.path.join(output_dir, 'trajectory_start_end.png'), dpi=150)
     plt.close()
 
 
@@ -466,6 +398,86 @@ def analyze_gripper_usage(data, output_dir):
     plt.close()
 
 
+def plot_temporal_evolution(data, output_dir):
+    """Plot how EEF positions evolve through the trajectory phases."""
+    if data['states'].shape[1] != 59:
+        return
+    
+    states = data['states']
+    traj_lengths = data['traj_lengths']
+    
+    # Collect states at different phases
+    early_states = []
+    mid_states = []
+    late_states = []
+    
+    idx = 0
+    for length in traj_lengths:
+        traj_states = states[idx:idx + length]
+        n = len(traj_states)
+        early_states.append(traj_states[:n//3])
+        mid_states.append(traj_states[n//3:2*n//3])
+        late_states.append(traj_states[2*n//3:])
+        idx += length
+    
+    early_states = np.vstack(early_states)
+    mid_states = np.vstack(mid_states)
+    late_states = np.vstack(late_states)
+    
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    
+    # Robot 0 XY at different phases
+    axes[0, 0].scatter(early_states[:, 0], early_states[:, 1], alpha=0.01, s=1, c='blue', label='Early')
+    axes[0, 0].scatter(mid_states[:, 0], mid_states[:, 1], alpha=0.01, s=1, c='green', label='Mid')
+    axes[0, 0].scatter(late_states[:, 0], late_states[:, 1], alpha=0.01, s=1, c='red', label='Late')
+    axes[0, 0].set_xlabel('X'); axes[0, 0].set_ylabel('Y')
+    axes[0, 0].set_title('Robot 0 EEF: XY by Phase')
+    
+    axes[0, 1].scatter(early_states[:, 0], early_states[:, 2], alpha=0.01, s=1, c='blue')
+    axes[0, 1].scatter(mid_states[:, 0], mid_states[:, 2], alpha=0.01, s=1, c='green')
+    axes[0, 1].scatter(late_states[:, 0], late_states[:, 2], alpha=0.01, s=1, c='red')
+    axes[0, 1].set_xlabel('X'); axes[0, 1].set_ylabel('Z')
+    axes[0, 1].set_title('Robot 0 EEF: XZ by Phase')
+    
+    axes[0, 2].scatter(early_states[:, 1], early_states[:, 2], alpha=0.01, s=1, c='blue')
+    axes[0, 2].scatter(mid_states[:, 1], mid_states[:, 2], alpha=0.01, s=1, c='green')
+    axes[0, 2].scatter(late_states[:, 1], late_states[:, 2], alpha=0.01, s=1, c='red')
+    axes[0, 2].set_xlabel('Y'); axes[0, 2].set_ylabel('Z')
+    axes[0, 2].set_title('Robot 0 EEF: YZ by Phase')
+    
+    # Robot 1
+    axes[1, 0].scatter(early_states[:, 9], early_states[:, 10], alpha=0.01, s=1, c='blue', label='Early')
+    axes[1, 0].scatter(mid_states[:, 9], mid_states[:, 10], alpha=0.01, s=1, c='green', label='Mid')
+    axes[1, 0].scatter(late_states[:, 9], late_states[:, 10], alpha=0.01, s=1, c='red', label='Late')
+    axes[1, 0].set_xlabel('X'); axes[1, 0].set_ylabel('Y')
+    axes[1, 0].set_title('Robot 1 EEF: XY by Phase')
+    
+    axes[1, 1].scatter(early_states[:, 9], early_states[:, 11], alpha=0.01, s=1, c='blue')
+    axes[1, 1].scatter(mid_states[:, 9], mid_states[:, 11], alpha=0.01, s=1, c='green')
+    axes[1, 1].scatter(late_states[:, 9], late_states[:, 11], alpha=0.01, s=1, c='red')
+    axes[1, 1].set_xlabel('X'); axes[1, 1].set_ylabel('Z')
+    axes[1, 1].set_title('Robot 1 EEF: XZ by Phase')
+    
+    axes[1, 2].scatter(early_states[:, 10], early_states[:, 11], alpha=0.01, s=1, c='blue')
+    axes[1, 2].scatter(mid_states[:, 10], mid_states[:, 11], alpha=0.01, s=1, c='green')
+    axes[1, 2].scatter(late_states[:, 10], late_states[:, 11], alpha=0.01, s=1, c='red')
+    axes[1, 2].set_xlabel('Y'); axes[1, 2].set_ylabel('Z')
+    axes[1, 2].set_title('Robot 1 EEF: YZ by Phase')
+    
+    # Add legend
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', label='Early (0-33%)', markersize=10),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='green', label='Mid (33-66%)', markersize=10),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red', label='Late (66-100%)', markersize=10),
+    ]
+    fig.legend(handles=legend_elements, loc='upper center', ncol=3, bbox_to_anchor=(0.5, 1.02))
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'temporal_evolution.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def main(args):
     os.makedirs(args.output_dir, exist_ok=True)
     
@@ -490,10 +502,7 @@ def main(args):
     diversity = analyze_trajectory_diversity(data)
     print(f"Start state std (mean across dims): {diversity['start_state_std'].mean():.4f}")
     print(f"End state std (mean across dims): {diversity['end_state_std'].mean():.4f}")
-    print(f"Trajectory rewards - mean: {diversity['traj_rewards'].mean():.4f}, "
-          f"std: {diversity['traj_rewards'].std():.4f}, "
-          f"min: {diversity['traj_rewards'].min():.4f}, "
-          f"max: {diversity['traj_rewards'].max():.4f}")
+    print(f"Number of trajectories: {len(diversity['start_states'])}")
     
     # State coverage
     print("\n=== State Space Coverage ===")
@@ -502,6 +511,13 @@ def main(args):
     avg_entropy = np.mean([c['normalized_entropy'] for c in state_coverage])
     print(f"Average state coverage (fraction of bins): {avg_coverage:.4f}")
     print(f"Average normalized entropy: {avg_entropy:.4f}")
+    
+    # Find dimensions with lowest coverage
+    coverages = [c['coverage'] for c in state_coverage]
+    worst_dims = np.argsort(coverages)[:5]
+    print(f"Dimensions with worst coverage: {worst_dims.tolist()}")
+    for dim in worst_dims:
+        print(f"  Dim {dim}: coverage={coverages[dim]:.3f}")
     
     # Action coverage
     print("\n=== Action Space Coverage ===")
@@ -533,17 +549,17 @@ def main(args):
     plot_action_distributions(data['actions'], args.output_dir)
     print("Generated action_distributions.png")
     
-    plot_trajectory_rewards(diversity['traj_rewards'], args.output_dir)
-    print("Generated trajectory_rewards.png")
-    
     plot_eef_positions(data['states'], data['traj_lengths'], args.output_dir)
     print("Generated eef_positions.png")
     
-    plot_successful_vs_failed_trajectories(data, args.output_dir)
-    print("Generated success_vs_failed_positions.png")
+    plot_trajectory_start_end(data, args.output_dir)
+    print("Generated trajectory_start_end.png")
     
     analyze_gripper_usage(data, args.output_dir)
     print("Generated gripper_analysis.png")
+    
+    plot_temporal_evolution(data, args.output_dir)
+    print("Generated temporal_evolution.png")
     
     # Summary for hypothesis testing
     print("\n" + "="*60)
@@ -561,18 +577,13 @@ Key findings from this analysis:
 5. Action entropy: {avg_action_entropy:.3f}
 
 To test your hypothesis further:
-1. Check success_vs_failed_positions.png - if successful trajectories (green) 
-   visit regions that failed trajectories (red) don't, this supports your hypothesis
-2. Check action_distributions.png - if actions are concentrated in a narrow range,
-   the dataset may lack diversity in actions needed for optimal behavior
-3. Compare trajectory_rewards.png - if most trajectories have low reward, the 
-   dataset may not demonstrate the optimal behavior at all
+1. Check temporal_evolution.png - does the dataset cover diverse paths?
+2. Check trajectory_start_end.png - are trajectories diverse or clustered?
+3. Check action_distributions.png - if actions are concentrated in narrow ranges,
+   the dataset may lack diversity for optimal behavior
 
-For IDQL specifically:
-- IDQL uses expectile regression on Q-values, which is conservative
-- If the dataset doesn't contain successful demonstrations of certain actions,
-  IDQL will assign low Q-values to those actions
-- DPPO can explore and discover new actions through online interaction
+Next step: Collect rollouts from DPPO and compare with this dataset
+to see what regions DPPO visits that the dataset doesn't cover.
 """)
     
     print(f"\nAll outputs saved to: {args.output_dir}")
