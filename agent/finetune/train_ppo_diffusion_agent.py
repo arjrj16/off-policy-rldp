@@ -99,8 +99,8 @@ class TrainPPODiffusionAgent(TrainPPOAgent):
 
             # Collect a set of trajectories from env
             for step in range(self.n_steps):
-                if step % 10 == 0:
-                    print(f"Processed step {step} of {self.n_steps}")
+                # if step % 10 == 0:
+                #     print(f"Processed step {step} of {self.n_steps}")
 
                 # Select action
                 with torch.no_grad():

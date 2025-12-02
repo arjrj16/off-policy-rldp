@@ -686,12 +686,22 @@ class AsyncVectorEnv(VectorEnv):
 
     def reset_arg(self, options_list, **kwargs):
         results = self.call_sync_arg("reset", "options", options_list)
-        obs = [result[0] for result in results]
-        if isinstance(obs[0], np.ndarray):
+
+        obs = []
+        for i, (ret, success) in enumerate(results):
+            if not success:
+                raise RuntimeError(
+                    f"Env {i} failed during reset_arg with options={options_list[i]!r}"
+                )
+            obs.append(ret)
+
+        first = obs[0]
+        if isinstance(first, np.ndarray):
             return np.stack(obs)
-        else:
-            assert isinstance(obs[0], dict)
+        elif isinstance(first, dict):
             return obs
+        else:
+            raise TypeError(f"Unexpected obs type from reset_arg: {type(first)}")
 
     def reset_one_arg(self, env_ind, options=None):
         """

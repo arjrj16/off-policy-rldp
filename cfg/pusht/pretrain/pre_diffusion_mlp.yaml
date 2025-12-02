@@ -14,8 +14,8 @@ device: cuda:0
 env: pusht
 obs_dim: 5  # agent_x, agent_y, block_x, block_y, block_angle
 action_dim: 2  # target_agent_x, target_agent_y
-denoising_steps: 20
-horizon_steps: 8
+denoising_steps: 100
+horizon_steps: 16
 cond_steps: 2  # condition on 2 observation steps
 
 wandb:
@@ -24,7 +24,7 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 train:
-  n_epochs: 3000  # Match robomimic - much more training!
+  n_epochs: 100  # Match robomimic - much more training!
   batch_size: 256
   learning_rate: 1e-4
   weight_decay: 1e-6
