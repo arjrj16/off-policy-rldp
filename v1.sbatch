@@ -4,7 +4,7 @@
 #SBATCH -p mit_normal_gpu              # partition
 #SBATCH --gres=gpu:l40:1               # 1x L40 GPU
 #SBATCH -N 1                           # 1 node
-#SBATCH --cpus-per-task=8              # CPUs for parallel envs
+#SBATCH --cpus-per-task=16             # CPUs for parallel envs
 #SBATCH --mem=32G                      # memory
 #SBATCH -t 06:00:00                    # walltime limit
 #SBATCH -o logs/%x-%j.out              # log file
@@ -61,16 +61,16 @@ export MUJOCO_GL=egl
 #     --config-dir=cfg/gym/scratch/hopper-v2
 
 # # Option 6: Robomimic - transport
-# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
-#     --config-dir=cfg/robomimic/finetune/transport 
+uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+    --config-dir=cfg/robomimic/finetune/transport 
 
 # # Option 7: push-t - IDQL
 # uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 #     --config-dir=cfg/pusht/finetune
 
 # # Option 8: push-t - DPPO
-uv run python script/run.py --config-name=ft_ppo_diffusion_mlp \
-    --config-dir=cfg/pusht/finetune
+# uv run python script/run.py --config-name=ft_ppo_diffusion_mlp \
+#     --config-dir=cfg/pusht/finetune
 
 # transport pretrain
 # uv run python script/run.py --config-name=pre_diffusion_mlp \
