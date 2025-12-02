@@ -230,14 +230,40 @@ class IDQLDiffusion(RWRDiffusion):
         self.network = self.bc_actor_frozen
         
         try:
-            sample_result = DiffusionModel.forward(
-                self,
-                {"state": cond_repeat},
-                deterministic=deterministic,
-            )
-            bc_samples = sample_result.trajectories
-            _, H, A = bc_samples.shape
-            bc_samples = bc_samples.view(S, B, H, A)
+            from model.diffusion.sampling import make_timesteps
+            device = self.betas.device
+            x = torch.randn((B * S, self.horizon_steps, self.action_dim), device=device)
+            if self.use_ddim:
+                t_all = self.ddim_t
+            else:
+                t_all = list(reversed(range(self.denoising_steps)))
+            for i, t in enumerate(t_all):
+                t_b = make_timesteps(B * S, t, device)
+                index_b = make_timesteps(B * S, i, device)
+                mean, logvar = self.p_mean_var(
+                    x=x,
+                    t=t_b,
+                    cond={"state": cond_repeat},
+                    index=index_b,
+                )
+                std = torch.exp(0.5 * logvar)
+                if self.use_ddim:
+                    std = torch.zeros_like(std) if deterministic else std
+                else:
+                    if deterministic and t == 0:
+                        std = torch.zeros_like(std)
+                    else:
+                        std = torch.clip(std, min=1e-3)
+                noise = torch.randn_like(x).clamp_(
+                    -self.randn_clip_value, self.randn_clip_value
+                )
+                x = mean + std * noise
+                if self.final_action_clip_value is not None and i == len(t_all) - 1:
+                    x = torch.clamp(
+                        x, -self.final_action_clip_value, self.final_action_clip_value
+                    )
+            _, H, A = x.shape
+            bc_samples = x.view(S, B, H, A)
         finally:
             self.network = original_network
         
