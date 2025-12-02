@@ -13,6 +13,7 @@ import torch.nn.functional as F
 log = logging.getLogger(__name__)
 
 from model.diffusion.diffusion_rwr import RWRDiffusion
+from model.diffusion.diffusion import DiffusionModel
 
 
 def expectile_loss(diff, expectile=0.8):
@@ -229,18 +230,15 @@ class IDQLDiffusion(RWRDiffusion):
         self.network = self.bc_actor_frozen
         
         try:
-            # Sample using parent's forward (pure diffusion, no Q-filtering)
-            sample_result = super(IDQLDiffusion, self).forward(
+            sample_result = DiffusionModel.forward(
+                self,
                 {"state": cond_repeat},
                 deterministic=deterministic,
             )
-            # Extract trajectories from Sample namedtuple
             bc_samples = sample_result.trajectories
-            # Reshape to (S, B, H, A)
             _, H, A = bc_samples.shape
             bc_samples = bc_samples.view(S, B, H, A)
         finally:
-            # Restore original network
             self.network = original_network
         
         return bc_samples
