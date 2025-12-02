@@ -94,6 +94,13 @@ class TrainIDQLDiffusionAgent(TrainAgent):
 
         # Sampling
         self.num_sample = cfg.train.eval_sample_num
+        
+        # Diagnostic tracking
+        self.diagnostic_enabled = cfg.train.get("diagnostic", {}).get("enabled", False)
+        self.diagnostic_env_idx = cfg.train.get("diagnostic", {}).get("env_idx", 0)
+        self.diagnostic_bc_num_samples = cfg.train.get("diagnostic", {}).get("bc_num_samples", 64)
+        if self.diagnostic_enabled:
+            log.info(f"q tracking enabled for environment {self.diagnostic_env_idx}")
 
     def run(self):
 
@@ -110,6 +117,10 @@ class TrainIDQLDiffusionAgent(TrainAgent):
         cnt_train_step = 0
         last_itr_eval = False
         done_venv = np.zeros((1, self.n_envs))
+        
+        diag_current_episode = None
+        diag_episode_data = []
+        
         while self.itr < self.n_train_itr:
 
             # Prepare video paths for each envs --- only applies for the first set of episodes if allowing reset within iteration and each iteration has multiple episodes from one env
@@ -127,13 +138,20 @@ class TrainIDQLDiffusionAgent(TrainAgent):
 
             # Reset env before iteration starts (1) if specified, (2) at eval mode, or (3) right after eval mode
             firsts_trajs = np.zeros((self.n_steps + 1, self.n_envs))
-            if self.reset_at_iteration or eval_mode or last_itr_eval:
+            forced_reset_this_itr = self.reset_at_iteration or eval_mode or last_itr_eval
+            if forced_reset_this_itr:
                 prev_obs_venv = self.reset_env_all(options_venv=options_venv)
                 firsts_trajs[0] = 1
+                # If we forced a reset, any ongoing diagnostic episode is aborted (truncated)
+                if self.diagnostic_enabled and diag_current_episode is not None:
+                    # Tag and drop aborted episode (don't include in metrics - it's corrupted)
+                    diag_current_episode = None
             else:
                 # if done at the end of last iteration, the envs are just reset
                 firsts_trajs[0] = done_venv
             reward_trajs = np.zeros((self.n_steps, self.n_envs))
+            
+            diag_episode_data_this_itr = []
 
             # Collect a set of trajectories from env
             for step in range(self.n_steps):
@@ -147,17 +165,84 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         .float()
                         .to(self.device)
                     }
-                    samples = (
-                        self.model(
+                    
+                    # Get action with diagnostics if enabled
+                    if self.diagnostic_enabled:
+                        result = self.model(
                             cond=cond,
                             deterministic=eval_mode and self.eval_deterministic,
                             num_sample=self.num_sample,
                             use_expectile_exploration=self.use_expectile_exploration,
+                            return_diagnostics=True,
                         )
-                        .cpu()
-                        .numpy()
-                    )  # n_env x horizon x act
+                        samples, diag = result
+                        samples = samples.cpu().numpy()
+                    else:
+                        samples = (
+                            self.model(
+                                cond=cond,
+                                deterministic=eval_mode and self.eval_deterministic,
+                                num_sample=self.num_sample,
+                                use_expectile_exploration=self.use_expectile_exploration,
+                            )
+                            .cpu()
+                            .numpy()
+                        )  # n_env x horizon x act
+                        diag = None
+                    
                 action_venv = samples[:, : self.act_steps]
+                
+                # Compute diagnostics for tracked environment
+                if self.diagnostic_enabled and diag is not None and self.diagnostic_env_idx < self.n_envs:
+                    if firsts_trajs[step, self.diagnostic_env_idx] == 1:
+                        if diag_current_episode is not None:
+                            log.warning(f"Starting new episode but diag_current_episode exists at step {step}, itr {self.itr}")
+                            diag_current_episode = None
+                        diag_current_episode = {
+                            "q_start": None,
+                            "rewards": [],
+                            "support_distances": [],
+                            "q_values": [],
+                            "step": step,
+                            "itr": self.itr,
+                        }
+                    
+                    # Check if episode is still active (not done from previous step)
+                    env_was_done = done_venv[self.diagnostic_env_idx] if step > 0 else False
+                    
+                    # Compute Q-value for chosen action (for env 0) - only if episode is active
+                    if diag_current_episode is not None and not env_was_done:
+                        # Get Q-value of chosen action
+                        chosen_idx = diag["chosen_indices"][self.diagnostic_env_idx].item()
+                        q_chosen = diag["all_q"][chosen_idx, self.diagnostic_env_idx].item()
+                        
+                        # Store Q at episode start
+                        if diag_current_episode["q_start"] is None:
+                            diag_current_episode["q_start"] = q_chosen
+                        
+                        # Sample from frozen BC to compute support distance
+                        cond_env0 = {
+                            "state": cond["state"][self.diagnostic_env_idx:self.diagnostic_env_idx+1]  # (1, T, D)
+                        }
+                        bc_samples = self.model.sample_from_frozen_bc(
+                            cond_env0,
+                            num_samples=self.diagnostic_bc_num_samples,
+                            deterministic=False,
+                        )  # (num_samples, 1, H, A)
+                        
+                        # Get chosen action for env 0
+                        chosen_action = torch.from_numpy(samples[self.diagnostic_env_idx]).float().to(self.device)  # (H, A)
+                        chosen_action = chosen_action[:self.act_steps]  # Only use act_steps
+                        
+                        # Compute L2 distance to nearest BC sample
+                        bc_samples_env0 = bc_samples[:, 0, :self.act_steps, :]  # (num_samples, act_steps, A)
+                        chosen_action_expanded = chosen_action.unsqueeze(0)  # (1, act_steps, A)
+                        
+                        l2_distances = ((bc_samples_env0 - chosen_action_expanded) ** 2).sum(dim=(1, 2)).sqrt()
+                        support_distance = l2_distances.min().item()
+                        
+                        diag_current_episode["support_distances"].append(support_distance)
+                        diag_current_episode["q_values"].append(q_chosen)
 
                 # Apply multi-step action
                 obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = (
@@ -166,6 +251,23 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 done_venv = terminated_venv | truncated_venv
                 reward_trajs[step] = reward_venv
                 firsts_trajs[step + 1] = done_venv
+                
+                if self.diagnostic_enabled and diag_current_episode is not None:
+                    diag_current_episode["rewards"].append(reward_venv[self.diagnostic_env_idx])
+                    
+                    if done_venv[self.diagnostic_env_idx]:
+                        if len(diag_current_episode["rewards"]) > 0:
+                            diag_current_episode["total_return"] = sum(diag_current_episode["rewards"])
+                            if diag_current_episode["q_start"] is not None:
+                                diag_current_episode["overestimation"] = (
+                                    diag_current_episode["q_start"] - diag_current_episode["total_return"]
+                                )
+                            if len(diag_current_episode["support_distances"]) > 0:
+                                diag_current_episode["avg_support_distance"] = np.mean(diag_current_episode["support_distances"])
+                                diag_current_episode["max_support_distance"] = np.max(diag_current_episode["support_distances"])
+                        
+                        diag_episode_data_this_itr.append(diag_current_episode.copy())
+                        diag_current_episode = None
 
                 # add to buffer
                 if not eval_mode:
@@ -187,6 +289,9 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 # count steps --- not acounting for done within action chunk
                 cnt_train_step += self.n_envs * self.act_steps if not eval_mode else 0
 
+            if self.diagnostic_enabled:
+                diag_episode_data.extend(diag_episode_data_this_itr)
+            
             # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
             episodes_start_end = []
             for env_ind in range(self.n_envs):
@@ -332,16 +437,44 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         f"eval: success rate {success_rate:8.4f} | avg episode reward {avg_episode_reward:8.4f} | avg best reward {avg_best_reward:8.4f}"
                     )
                     if self.use_wandb:
-                        wandb.log(
-                            {
-                                "success rate - eval": success_rate,
-                                "avg episode reward - eval": avg_episode_reward,
-                                "avg best reward - eval": avg_best_reward,
-                                "num episode - eval": num_episode_finished,
-                            },
-                            step=self.itr,
-                            commit=False,
-                        )
+                        log_dict = {
+                            "success rate - eval": success_rate,
+                            "avg episode reward - eval": avg_episode_reward,
+                            "avg best reward - eval": avg_best_reward,
+                            "num episode - eval": num_episode_finished,
+                        }
+                        
+                        if self.diagnostic_enabled and len(diag_episode_data) > 0:
+                            if len(diag_episode_data_this_itr) > 0:
+                                latest_ep = diag_episode_data_this_itr[-1]
+                            else:
+                                latest_ep = diag_episode_data[-1] if len(diag_episode_data) > 0 else None
+                            
+                            if latest_ep is not None and "total_return" in latest_ep:
+                                log_dict.update({
+                                    "diag/q_start": latest_ep["q_start"] if latest_ep["q_start"] is not None else 0.0,
+                                    "diag/return_real": latest_ep["total_return"],
+                                    "diag/overestimation": latest_ep.get("overestimation", 0.0),
+                                    "diag/avg_support_distance": latest_ep.get("avg_support_distance", 0.0),
+                                    "diag/max_support_distance": latest_ep.get("max_support_distance", 0.0),
+                                })
+                            
+                            if len(diag_episode_data) > 0:
+                                all_q_vals = []
+                                all_support_dists = []
+                                for ep in diag_episode_data:
+                                    all_q_vals.extend(ep.get("q_values", []))
+                                    all_support_dists.extend(ep.get("support_distances", []))
+                                
+                                if len(all_q_vals) > 0 and len(all_support_dists) > 0:
+                                    log_dict.update({
+                                        "diag/step_q_mean": np.mean(all_q_vals),
+                                        "diag/step_q_std": np.std(all_q_vals),
+                                        "diag/step_support_mean": np.mean(all_support_dists),
+                                        "diag/step_support_std": np.std(all_support_dists),
+                                    })
+                        
+                        wandb.log(log_dict, step=self.itr, commit=False)
                     run_results[-1]["eval_success_rate"] = success_rate
                     run_results[-1]["eval_episode_reward"] = avg_episode_reward
                     run_results[-1]["eval_best_reward"] = avg_best_reward
@@ -350,17 +483,45 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         f"{self.itr}: step {cnt_train_step:8d} | loss actor {loss_actor:8.4f} | reward {avg_episode_reward:8.4f} | t:{time:8.4f}"
                     )
                     if self.use_wandb:
-                        wandb.log(
-                            {
-                                "total env step": cnt_train_step,
-                                "loss - actor": loss_actor,
-                                "loss - critic": loss_critic,
-                                "avg episode reward - train": avg_episode_reward,
-                                "num episode - train": num_episode_finished,
-                            },
-                            step=self.itr,
-                            commit=True,
-                        )
+                        log_dict = {
+                            "total env step": cnt_train_step,
+                            "loss - actor": loss_actor,
+                            "loss - critic": loss_critic,
+                            "avg episode reward - train": avg_episode_reward,
+                            "num episode - train": num_episode_finished,
+                        }
+                        
+                        if self.diagnostic_enabled and len(diag_episode_data) > 0:
+                            if len(diag_episode_data_this_itr) > 0:
+                                latest_ep = diag_episode_data_this_itr[-1]
+                            else:
+                                latest_ep = diag_episode_data[-1] if len(diag_episode_data) > 0 else None
+                            
+                            if latest_ep is not None and "total_return" in latest_ep:
+                                log_dict.update({
+                                    "diag/q_start": latest_ep["q_start"] if latest_ep["q_start"] is not None else 0.0,
+                                    "diag/return_real": latest_ep["total_return"],
+                                    "diag/overestimation": latest_ep.get("overestimation", 0.0),
+                                    "diag/avg_support_distance": latest_ep.get("avg_support_distance", 0.0),
+                                    "diag/max_support_distance": latest_ep.get("max_support_distance", 0.0),
+                                })
+                            
+                            if len(diag_episode_data) > 0:
+                                all_q_vals = []
+                                all_support_dists = []
+                                for ep in diag_episode_data:
+                                    all_q_vals.extend(ep.get("q_values", []))
+                                    all_support_dists.extend(ep.get("support_distances", []))
+                                
+                                if len(all_q_vals) > 0 and len(all_support_dists) > 0:
+                                    log_dict.update({
+                                        "diag/step_q_mean": np.mean(all_q_vals),
+                                        "diag/step_q_std": np.std(all_q_vals),
+                                        "diag/step_support_mean": np.mean(all_support_dists),
+                                        "diag/step_support_std": np.std(all_support_dists),
+                                    })
+                        
+                        wandb.log(log_dict, step=self.itr, commit=True)
                     run_results[-1]["train_episode_reward"] = avg_episode_reward
                 with open(self.result_path, "wb") as f:
                     pickle.dump(run_results, f)
