@@ -83,6 +83,28 @@ train:
     enabled: true
     env_idx: 0
     bc_num_samples: 8
+  # Support filtering - filters diffusion candidates by support distance before Q-selection
+  # This prevents selecting "outlier" actions that have high Q but are far from BC support
+  support_filter:
+    enabled: true
+    mode: "pairwise"  # "pairwise" (cheap, inter-candidate distance) or "bc" (sample from frozen BC)
+    bc_num_samples: 32  # Only used when mode="bc"
+    act_steps: ${act_steps}  # Use act_steps for distance computation (null = use all horizon_steps)
+    # Annealing by iteration: start strict, loosen over time
+    # Format: list of [itr_threshold, topk_value] pairs
+    # topk_value can be int, float (fraction of S), or string like "S/4"
+    topk_schedule:
+      - [0, 3]      # itr 0-49: keep top 3 by support (strict)
+      - [50, 5]     # itr 50-99: keep top 5 by support
+      - [100, 8]    # itr 100+: keep top 8 (mild filtering)
+      - [150, 10]   # itr 150+: keep all 10 (no filtering)
+    # Alternative: anneal by success rate (set anneal_by_success: true to use)
+    anneal_by_success: false
+    success_thresholds:
+      - [0.0, 3]    # success < 10%: strict filtering
+      - [0.1, 5]    # success 10-30%: moderate  
+      - [0.3, 8]    # success 30-50%: mild
+      - [0.5, 10]   # success > 50%: no filtering
 
 model:
   _target_: model.diffusion.diffusion_idql.IDQLDiffusion
@@ -96,6 +118,7 @@ model:
     time_dim: 32
     mlp_dims: [1024, 1024, 1024]
     residual_style: True
+    use_layernorm: True  # Helps reduce outliers in diffusion samples (recommended by IDQL paper)
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
     horizon_steps: ${horizon_steps}
     action_dim: ${action_dim}

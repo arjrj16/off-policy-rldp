@@ -125,7 +125,93 @@ class IDQLDiffusion(RWRDiffusion):
             loss = F.mse_loss(x_recon, x_start)
         return loss.mean()
 
-    # ---------- Sampling ----------#``
+    # ---------- Sampling ----------#
+
+    def _compute_pairwise_support_distance(self, samples_expanded, act_steps=None):
+        """Compute support distance using pairwise distance among candidates.
+        
+        For each candidate, compute min L2 distance to other candidates.
+        This is a cheap proxy for "how unusual" a sample is.
+        
+        Args:
+            samples_expanded: (S, B, H, A) candidate samples
+            act_steps: if provided, only use first act_steps for distance computation
+            
+        Returns:
+            support_dist: (S, B) distance for each candidate
+        """
+        S, B, H, A = samples_expanded.shape
+        
+        # Optionally truncate to act_steps
+        if act_steps is not None:
+            samples_for_dist = samples_expanded[:, :, :act_steps, :]  # (S, B, act_steps, A)
+        else:
+            samples_for_dist = samples_expanded
+        
+        # Flatten action dimensions: (S, B, act_steps * A)
+        samples_flat = samples_for_dist.reshape(S, B, -1)
+        
+        # Compute pairwise distances: for each batch, compute S x S distance matrix
+        # samples_flat: (S, B, D) where D = act_steps * A
+        # We want: dist[i, j, b] = ||samples_flat[i, b] - samples_flat[j, b]||
+        
+        # Expand for broadcasting: (S, 1, B, D) - (1, S, B, D) -> (S, S, B, D)
+        diff = samples_flat[:, None, :, :] - samples_flat[None, :, :, :]  # (S, S, B, D)
+        dist_sq = (diff ** 2).sum(dim=-1)  # (S, S, B)
+        dist = torch.sqrt(dist_sq + 1e-8)  # (S, S, B)
+        
+        # For each sample i, find min distance to any other sample j != i
+        # Set diagonal to inf so we don't pick self
+        inf_diag = torch.eye(S, device=dist.device).unsqueeze(-1) * 1e9  # (S, S, 1)
+        dist_masked = dist + inf_diag  # (S, S, B)
+        
+        # Min over j dimension gives us the nearest neighbor distance for each sample
+        support_dist, _ = dist_masked.min(dim=1)  # (S, B)
+        
+        return support_dist
+
+    def _compute_bc_support_distance(self, samples_expanded, cond, bc_num_samples=32, act_steps=None):
+        """Compute support distance by sampling from frozen BC actor.
+        
+        More accurate than pairwise but slower.
+        
+        Args:
+            samples_expanded: (S, B, H, A) candidate samples
+            cond: conditioning dict with state
+            bc_num_samples: number of BC samples to draw for comparison
+            act_steps: if provided, only use first act_steps for distance computation
+            
+        Returns:
+            support_dist: (S, B) min distance to BC samples for each candidate
+        """
+        S, B, H, A = samples_expanded.shape
+        
+        # Sample from frozen BC
+        bc_samples = self.sample_from_frozen_bc(cond, num_samples=bc_num_samples, deterministic=False)
+        # bc_samples: (K, B, H, A) where K = bc_num_samples
+        K = bc_samples.shape[0]
+        
+        # Optionally truncate to act_steps
+        if act_steps is not None:
+            samples_for_dist = samples_expanded[:, :, :act_steps, :]  # (S, B, act_steps, A)
+            bc_for_dist = bc_samples[:, :, :act_steps, :]  # (K, B, act_steps, A)
+        else:
+            samples_for_dist = samples_expanded
+            bc_for_dist = bc_samples
+        
+        # Flatten: (S, B, D) and (K, B, D)
+        samples_flat = samples_for_dist.reshape(S, B, -1)
+        bc_flat = bc_for_dist.reshape(K, B, -1)
+        
+        # Compute distances: (S, K, B)
+        diff = samples_flat[:, None, :, :] - bc_flat[None, :, :, :]  # (S, K, B, D)
+        dist_sq = (diff ** 2).sum(dim=-1)  # (S, K, B)
+        dist = torch.sqrt(dist_sq + 1e-8)  # (S, K, B)
+        
+        # Min over BC samples
+        support_dist, _ = dist.min(dim=1)  # (S, B)
+        
+        return support_dist
 
     # override
     @torch.no_grad()
@@ -137,15 +223,30 @@ class IDQLDiffusion(RWRDiffusion):
         critic_hyperparam=0.7,  # sampling weight for implicit policy
         use_expectile_exploration=True,
         return_diagnostics=False,
+        # Support filtering params
+        support_filter_enabled=False,
+        support_topk=None,  # If set, keep only top-K candidates by smallest support distance
+        support_filter_mode="pairwise",  # "pairwise" or "bc"
+        support_bc_num_samples=32,  # Number of BC samples for "bc" mode
+        support_act_steps=None,  # Act steps for distance computation (defaults to all)
     ):
         """assume state-only, no rgb in cond
         
-            Args:
+        Args:
             return_diagnostics: (samples, diagnostics_dict) where
                 diagnostics_dict contains:
                 - all_samples: (S, B, H, A) all candidate samples before Q-selection
                 - all_q: (S, B) Q-values for all samples
                 - chosen_indices: (B,) indices of chosen samples
+                - support_dist: (S, B) support distances (if filter enabled)
+                - filtered_mask: (S, B) bool mask of which candidates survived filtering
+            support_filter_enabled: Whether to filter candidates by support distance
+            support_topk: Keep only top-K candidates by smallest support distance.
+                         If None, uses num_sample (no filtering even if enabled).
+            support_filter_mode: "pairwise" (cheap, uses inter-candidate distance) or
+                                "bc" (accurate, samples from frozen BC)
+            support_bc_num_samples: Number of BC samples when mode="bc"
+            support_act_steps: Only use first N action steps for distance computation
         """
         # repeat obs num_sample times along dim 0
         cond_shape_repeat_dims = tuple(1 for _ in cond["state"].shape)
@@ -160,18 +261,48 @@ class IDQLDiffusion(RWRDiffusion):
             deterministic=deterministic,
         )
         _, H, A = samples.shape
+        samples_expanded = samples.view(S, B, H, A)
 
-        ## *** should sampels be only samples = samples[:, : self.act_steps] as is done in train?
         # get current Q-function
         current_q1, current_q2 = self.target_q({"state": cond_repeat}, samples)
         q = torch.min(current_q1, current_q2)
         q = q.view(S, B)
+        
+        # --- Support filtering ---
+        support_dist = None
+        filtered_mask = None
+        q_filtered = q  # Will be modified if filtering is applied
+        
+        if support_filter_enabled and support_topk is not None and support_topk < S:
+            # Compute support distances
+            if support_filter_mode == "bc":
+                support_dist = self._compute_bc_support_distance(
+                    samples_expanded, cond, 
+                    bc_num_samples=support_bc_num_samples,
+                    act_steps=support_act_steps
+                )
+            else:  # pairwise
+                support_dist = self._compute_pairwise_support_distance(
+                    samples_expanded, act_steps=support_act_steps
+                )
+            
+            # Create filter mask: keep top-K by smallest support distance
+            # For each batch, find the K samples with smallest support_dist
+            _, topk_indices = support_dist.topk(k=support_topk, dim=0, largest=False)  # (K, B)
+            
+            # Create boolean mask (S, B)
+            filtered_mask = torch.zeros_like(q, dtype=torch.bool)
+            batch_indices = torch.arange(B, device=q.device).unsqueeze(0).expand(support_topk, -1)
+            filtered_mask[topk_indices, batch_indices] = True
+            
+            # Set Q of filtered-out candidates to -inf so they won't be selected
+            q_filtered = q.clone()
+            q_filtered[~filtered_mask] = float('-inf')
 
-        # Use argmax
+        # Use argmax (with support filtering applied via q_filtered)
         if deterministic or (not use_expectile_exploration):
             # gather the best sample -- filter out suboptimal Q during inference
-            best_indices = q.argmax(0)
-            samples_expanded = samples.view(S, B, H, A)
+            best_indices = q_filtered.argmax(0)
 
             # dummy dimension @ dim 0 for batched indexing
             sample_indices = best_indices[None, :, None, None]  # [1, B, 1, 1]
@@ -186,11 +317,16 @@ class IDQLDiffusion(RWRDiffusion):
             v = current_v.view(S, B)
             adv = q - v
 
-            # Compute weights for sampling
-            samples_expanded = samples.view(S, B, H, A)
-
             # expectile exploration policy
             tau_weights = torch.where(adv > 0, critic_hyperparam, 1 - critic_hyperparam)
+            
+            # Apply support filter to weights: zero out filtered candidates
+            if filtered_mask is not None:
+                tau_weights = tau_weights * filtered_mask.float()
+                # Handle case where all candidates are filtered for a batch element
+                # (shouldn't happen with topk, but be safe)
+                tau_weights = tau_weights + 1e-8
+            
             tau_weights = tau_weights / tau_weights.sum(0)  # normalize
 
             # select a sample from DP probabilistically -- sample index per batch and compile
@@ -209,9 +345,14 @@ class IDQLDiffusion(RWRDiffusion):
         if return_diagnostics:
             diagnostics = {
                 "all_samples": samples_expanded,  # (S, B, H, A)
-                "all_q": q,  # (S, B)
+                "all_q": q,  # (S, B) - original Q values
                 "chosen_indices": chosen_indices,  # (B,)
             }
+            if support_dist is not None:
+                diagnostics["support_dist"] = support_dist  # (S, B)
+            if filtered_mask is not None:
+                diagnostics["filtered_mask"] = filtered_mask  # (S, B)
+                diagnostics["num_filtered"] = filtered_mask.sum(dim=0).float().mean().item()
             return samples, diagnostics
         return samples
     

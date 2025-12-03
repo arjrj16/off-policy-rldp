@@ -118,6 +118,114 @@ class TrainIDQLDiffusionAgent(TrainAgent):
             self._diag_csv.writeheader()
             self._diag_csv_f.flush()
             self._diag_episode_counter = 0
+        
+        # Support filtering config
+        support_filter_cfg = cfg.train.get("support_filter", {})
+        self.support_filter_enabled = support_filter_cfg.get("enabled", False)
+        self.support_filter_mode = support_filter_cfg.get("mode", "pairwise")  # "pairwise" or "bc"
+        self.support_bc_num_samples = support_filter_cfg.get("bc_num_samples", 32)
+        self.support_act_steps = support_filter_cfg.get("act_steps", None)  # None means use all
+        
+        # Annealing schedule for support_topk
+        # topk_schedule is a list of (itr_threshold, topk_value) tuples
+        # e.g., [(0, S/4), (50, S/2), (100, S)] means:
+        #   - itr 0-49: topk = S/4
+        #   - itr 50-99: topk = S/2
+        #   - itr 100+: topk = S (effectively no filtering)
+        self.support_topk_schedule = support_filter_cfg.get("topk_schedule", None)
+        self.support_topk_default = support_filter_cfg.get("topk_default", None)
+        
+        # Alternative: success-rate based annealing
+        # When success rate exceeds threshold, loosen the filter
+        self.support_anneal_by_success = support_filter_cfg.get("anneal_by_success", False)
+        self.support_success_thresholds = support_filter_cfg.get("success_thresholds", [])
+        # e.g., [(0.1, S/4), (0.3, S/2), (0.5, S)] means:
+        #   - success < 0.1: topk = S/4
+        #   - success 0.1-0.3: topk = S/2
+        #   - success > 0.3: topk = S
+        self._current_success_rate = 0.0  # Track for annealing
+        
+        if self.support_filter_enabled:
+            log.info(f"Support filtering enabled: mode={self.support_filter_mode}")
+            if self.support_topk_schedule:
+                log.info(f"  Annealing schedule (by itr): {self.support_topk_schedule}")
+            if self.support_anneal_by_success and self.support_success_thresholds:
+                log.info(f"  Annealing by success rate: {self.support_success_thresholds}")
+    
+    def _get_current_support_topk(self):
+        """Compute current support_topk based on annealing schedule.
+        
+        Priority:
+        1. If anneal_by_success is True, use success rate thresholds
+        2. Else if topk_schedule is set, use iteration-based schedule
+        3. Else use topk_default
+        4. If None, filtering is effectively disabled
+        
+        Returns:
+            int or None: The current topk value, or None to disable filtering
+        """
+        S = self.num_sample
+        
+        # Success-rate based annealing
+        if self.support_anneal_by_success and self.support_success_thresholds:
+            # success_thresholds: [(thresh1, topk1), (thresh2, topk2), ...]
+            # Sorted by threshold ascending
+            thresholds = sorted(self.support_success_thresholds, key=lambda x: x[0])
+            topk = None
+            for thresh, topk_val in thresholds:
+                if self._current_success_rate < thresh:
+                    break
+                topk = topk_val
+            # Resolve fractions like "S/4" to actual values
+            if topk is not None:
+                topk = self._resolve_topk_value(topk, S)
+            return topk
+        
+        # Iteration-based annealing
+        if self.support_topk_schedule:
+            # topk_schedule: [(itr1, topk1), (itr2, topk2), ...]
+            # Sorted by iteration ascending
+            schedule = sorted(self.support_topk_schedule, key=lambda x: x[0])
+            topk = None
+            for itr_thresh, topk_val in schedule:
+                if self.itr >= itr_thresh:
+                    topk = topk_val
+                else:
+                    break
+            if topk is not None:
+                topk = self._resolve_topk_value(topk, S)
+            return topk
+        
+        # Default
+        if self.support_topk_default is not None:
+            return self._resolve_topk_value(self.support_topk_default, S)
+        
+        return None
+    
+    def _resolve_topk_value(self, topk_val, S):
+        """Resolve topk value which can be int, float fraction, or string like 'S/4'.
+        
+        Args:
+            topk_val: int, float, or str (e.g., "S/4", "S/2")
+            S: number of samples
+            
+        Returns:
+            int: resolved topk value, clamped to [1, S]
+        """
+        if isinstance(topk_val, str):
+            # Parse expressions like "S/4", "S/2", "S"
+            topk_val = topk_val.replace("S", str(S))
+            topk_val = eval(topk_val)
+        
+        if isinstance(topk_val, float):
+            if topk_val <= 1.0:
+                # Treat as fraction of S
+                topk_val = int(topk_val * S)
+            else:
+                topk_val = int(topk_val)
+        
+        # Clamp to valid range
+        return max(1, min(int(topk_val), S))
 
     def run(self):
 
@@ -183,6 +291,9 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         .to(self.device)
                     }
                     
+                    # Compute current support filter params (with annealing)
+                    current_support_topk = self._get_current_support_topk() if self.support_filter_enabled else None
+                    
                     # Get action with diagnostics if enabled
                     if self.diagnostic_enabled:
                         result = self.model(
@@ -191,6 +302,12 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                             num_sample=self.num_sample,
                             use_expectile_exploration=self.use_expectile_exploration,
                             return_diagnostics=True,
+                            # Support filter params
+                            support_filter_enabled=self.support_filter_enabled,
+                            support_topk=current_support_topk,
+                            support_filter_mode=self.support_filter_mode,
+                            support_bc_num_samples=self.support_bc_num_samples,
+                            support_act_steps=self.support_act_steps,
                         )
                         samples, diag = result
                         samples = samples.cpu().numpy()
@@ -201,6 +318,12 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                                 deterministic=eval_mode and self.eval_deterministic,
                                 num_sample=self.num_sample,
                                 use_expectile_exploration=self.use_expectile_exploration,
+                                # Support filter params
+                                support_filter_enabled=self.support_filter_enabled,
+                                support_topk=current_support_topk,
+                                support_filter_mode=self.support_filter_mode,
+                                support_bc_num_samples=self.support_bc_num_samples,
+                                support_act_steps=self.support_act_steps,
                             )
                             .cpu()
                             .numpy()
@@ -411,6 +534,10 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 avg_best_reward = 0
                 success_rate = 0
                 log.info("[WARNING] No episode completed within the iteration!")
+            
+            # Update success rate for annealing (use eval success rate when available)
+            if eval_mode and num_episode_finished > 0:
+                self._current_success_rate = success_rate
 
             # Update models
             if not eval_mode:
@@ -516,8 +643,11 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 time = timer()
                 run_results[-1]["time"] = time
                 if eval_mode:
+                    # Log support filter info if enabled
+                    current_topk = self._get_current_support_topk() if self.support_filter_enabled else None
+                    topk_str = f" | topk={current_topk}" if current_topk else ""
                     log.info(
-                        f"eval: success rate {success_rate:8.4f} | avg episode reward {avg_episode_reward:8.4f} | avg best reward {avg_best_reward:8.4f}"
+                        f"eval: success rate {success_rate:8.4f} | avg episode reward {avg_episode_reward:8.4f} | avg best reward {avg_best_reward:8.4f}{topk_str}"
                     )
                     if self.use_wandb:
                         log_dict = {
@@ -526,6 +656,10 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                             "avg best reward - eval": avg_best_reward,
                             "num episode - eval": num_episode_finished,
                         }
+                        # Log support filter state
+                        if self.support_filter_enabled:
+                            log_dict["support_filter/topk"] = current_topk if current_topk else self.num_sample
+                            log_dict["support_filter/enabled"] = 1 if current_topk and current_topk < self.num_sample else 0
                         
                         if self.diagnostic_enabled and len(diag_episode_data) > 0:
                             if len(diag_episode_data_this_itr) > 0:
@@ -575,8 +709,10 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                     run_results[-1]["eval_episode_reward"] = avg_episode_reward
                     run_results[-1]["eval_best_reward"] = avg_best_reward
                 else:
+                    current_topk = self._get_current_support_topk() if self.support_filter_enabled else None
+                    topk_str = f" | topk={current_topk}" if current_topk else ""
                     log.info(
-                        f"{self.itr}: step {cnt_train_step:8d} | loss actor {loss_actor:8.4f} | reward {avg_episode_reward:8.4f} | t:{time:8.4f}"
+                        f"{self.itr}: step {cnt_train_step:8d} | loss actor {loss_actor:8.4f} | reward {avg_episode_reward:8.4f} | t:{time:8.4f}{topk_str}"
                     )
                     if self.use_wandb:
                         log_dict = {
@@ -586,6 +722,10 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                             "avg episode reward - train": avg_episode_reward,
                             "num episode - train": num_episode_finished,
                         }
+                        # Log support filter state
+                        if self.support_filter_enabled:
+                            log_dict["support_filter/topk"] = current_topk if current_topk else self.num_sample
+                            log_dict["support_filter/enabled"] = 1 if current_topk and current_topk < self.num_sample else 0
                         
                         if self.diagnostic_enabled and len(diag_episode_data) > 0:
                             if len(diag_episode_data_this_itr) > 0:
