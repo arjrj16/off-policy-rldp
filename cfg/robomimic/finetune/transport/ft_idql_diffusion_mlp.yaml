@@ -95,9 +95,9 @@ train:
     # topk_value can be int, float (fraction of S), or string like "S/4"
     topk_schedule:
       - [0, 3]      # itr 0-49: keep top 3 by support (strict)
-      - [50, 5]     # itr 50-99: keep top 5 by support
-      - [100, 8]    # itr 100+: keep top 8 (mild filtering)
-      - [150, 10]   # itr 150+: keep all 10 (no filtering)
+      - [50, 3]     # itr 50-99: keep top 5 by support
+      - [100, 3]    # itr 100+: keep top 8 (mild filtering)
+      - [150, 5]   # itr 150+: keep all 10 (no filtering)
     # Alternative: anneal by success rate (set anneal_by_success: true to use)
     anneal_by_success: false
     success_thresholds:
