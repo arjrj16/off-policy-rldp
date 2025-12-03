@@ -91,9 +91,13 @@ model:
   actor:
     _target_: model.diffusion.mlp_diffusion.DiffusionMLP
     time_dim: 32
-    mlp_dims: [1024, 1024, 1024]
+    mlp_dims: [256]
     cond_mlp_dims: [512, 64]
     residual_style: True
+    expansion_factor: 4
+    num_blocks: 3
+    dropout: 0.1
+    use_layernorm: True
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
     horizon_steps: ${horizon_steps}
     action_dim: ${action_dim}

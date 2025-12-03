@@ -185,6 +185,9 @@ class DiffusionMLP(nn.Module):
         out_activation_type="Identity",
         use_layernorm=False,
         residual_style=False,
+        expansion_factor=1,  # IDQL paper uses 4 for hidden_dim * 4 expansion
+        num_blocks=None,  # IDQL paper uses n=3 blocks
+        dropout=0,  # IDQL paper uses dropout
     ):
         super().__init__()
         output_dim = action_dim * horizon_steps
@@ -207,11 +210,23 @@ class DiffusionMLP(nn.Module):
             input_dim = time_dim + action_dim * horizon_steps + cond_mlp_dims[-1]
         else:
             input_dim = time_dim + action_dim * horizon_steps + cond_dim
+        
+        # Build kwargs for ResidualMLP
+        mlp_kwargs = {
+            "activation_type": activation_type,
+            "out_activation_type": out_activation_type,
+            "use_layernorm": use_layernorm,
+        }
+        if residual_style:
+            mlp_kwargs.update({
+                "expansion_factor": expansion_factor,
+                "num_blocks": num_blocks,
+                "dropout": dropout,
+            })
+        
         self.mlp_mean = model(
             [input_dim] + mlp_dims + [output_dim],
-            activation_type=activation_type,
-            out_activation_type=out_activation_type,
-            use_layernorm=use_layernorm,
+            **mlp_kwargs
         )
         self.time_dim = time_dim
 

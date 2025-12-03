@@ -87,6 +87,8 @@ class ResidualMLP(nn.Module):
     benchmarking the performance of different networks. The resiudal layers
     are based on the IBC paper implementation, which uses 2 residual lalyers
     with pre-actication with or without dropout and normalization.
+    
+    Supports IDQL paper's LN_Resnet architecture with expansion_factor parameter.
     """
 
     def __init__(
@@ -97,11 +99,21 @@ class ResidualMLP(nn.Module):
         use_layernorm=False,
         use_layernorm_final=False,
         dropout=0,
+        expansion_factor=1,  # IDQL paper uses 4 for hidden_dim * 4 expansion
+        num_blocks=None,  # If specified, use this many blocks instead of inferring from dim_list
     ):
         super(ResidualMLP, self).__init__()
         hidden_dim = dim_list[1]
-        num_hidden_layers = len(dim_list) - 3
-        assert num_hidden_layers % 2 == 0
+        
+        # If num_blocks is specified, use it directly (for IDQL paper: n=3)
+        # Otherwise, infer from dim_list (backward compatibility)
+        if num_blocks is not None:
+            n_blocks = num_blocks
+        else:
+            num_hidden_layers = len(dim_list) - 3
+            assert num_hidden_layers % 2 == 0
+            n_blocks = num_hidden_layers // 2
+        
         self.layers = nn.ModuleList([nn.Linear(dim_list[0], hidden_dim)])
         self.layers.extend(
             [
@@ -110,10 +122,13 @@ class ResidualMLP(nn.Module):
                     activation_type=activation_type,
                     use_layernorm=use_layernorm,
                     dropout=dropout,
+                    expansion_factor=expansion_factor,
                 )
-                for _ in range(1, num_hidden_layers, 2)
+                for _ in range(n_blocks)
             ]
         )
+        # Add activation after blocks (as per IDQL paper)
+        self.layers.append(activation_dict[activation_type])
         self.layers.append(nn.Linear(hidden_dim, dim_list[-1]))
         if use_layernorm_final:
             self.layers.append(nn.LayerNorm(dim_list[-1]))
@@ -132,23 +147,30 @@ class TwoLayerPreActivationResNetLinear(nn.Module):
         activation_type="Mish",
         use_layernorm=False,
         dropout=0,
+        expansion_factor=1,  # IDQL paper uses 4 for hidden_dim * 4 expansion
     ):
         super().__init__()
-        self.l1 = nn.Linear(hidden_dim, hidden_dim)
-        self.l2 = nn.Linear(hidden_dim, hidden_dim)
+        expanded_dim = hidden_dim * expansion_factor
+        self.l1 = nn.Linear(hidden_dim, expanded_dim)
+        self.l2 = nn.Linear(expanded_dim, hidden_dim)
         self.act = activation_dict[activation_type]
         if use_layernorm:
-            self.norm1 = nn.LayerNorm(hidden_dim, eps=1e-06)
-            self.norm2 = nn.LayerNorm(hidden_dim, eps=1e-06)
+            self.norm = nn.LayerNorm(hidden_dim, eps=1e-06)
         if dropout > 0:
-            raise NotImplementedError("Dropout not implemented for residual MLP!")
+            self.dropout = nn.Dropout(dropout)
+        else:
+            self.dropout = None
+        self.use_layernorm = use_layernorm
+        self.expansion_factor = expansion_factor
 
     def forward(self, x):
         x_input = x
-        if hasattr(self, "norm1"):
-            x = self.norm1(x)
-        x = self.l1(self.act(x))
-        if hasattr(self, "norm2"):
-            x = self.norm2(x)
-        x = self.l2(self.act(x))
+        # IDQL paper style: Dropout → LayerNorm → Dense(expand) → Activation → Dense(contract)
+        if self.dropout is not None:
+            x = self.dropout(x)
+        if self.use_layernorm:
+            x = self.norm(x)
+        x = self.l1(x)
+        x = self.act(x)
+        x = self.l2(x)
         return x + x_input
