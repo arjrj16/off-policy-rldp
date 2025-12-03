@@ -39,7 +39,7 @@ model:
   predict_epsilon: True
   denoised_clip_value: 1.0
   network:
-    target_: model.diffusion.mlp_diffusion.DiffusionMLP
+    _target_: model.diffusion.mlp_diffusion.DiffusionMLP
     time_dim: 32
     mlp_dims: [256]
     residual_style: True
