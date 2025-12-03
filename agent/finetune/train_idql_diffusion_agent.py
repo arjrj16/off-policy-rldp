@@ -13,6 +13,7 @@ import numpy as np
 import torch
 import logging
 import wandb
+import hydra
 from copy import deepcopy
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,15 @@ class TrainIDQLDiffusionAgent(TrainAgent):
 
     def __init__(self, cfg):
         super().__init__(cfg)
+
+        # Build offline dataset if provided
+        self.use_offline_data = cfg.get("offline_dataset", None) is not None
+        if self.use_offline_data:
+            self.dataset_offline = hydra.utils.instantiate(cfg.offline_dataset)
+            log.info(f"Loaded offline dataset with {len(self.dataset_offline)} transitions")
+        
+        # Ratio of offline data in each batch (0.0 = online only, 1.0 = offline only)
+        self.offline_ratio = cfg.train.get("offline_ratio", 0.5)
 
         # note the discount factor gamma here is applied to reward every act_steps, instead of every env step
         self.gamma = cfg.train.gamma
@@ -127,6 +137,24 @@ class TrainIDQLDiffusionAgent(TrainAgent):
         action_buffer = deque(maxlen=self.buffer_size)
         reward_buffer = deque(maxlen=self.buffer_size)
         terminated_buffer = deque(maxlen=self.buffer_size)
+
+        # Load offline dataset into numpy arrays if available
+        if self.use_offline_data:
+            dataloader_offline = torch.utils.data.DataLoader(
+                self.dataset_offline,
+                batch_size=len(self.dataset_offline),
+                drop_last=False,
+            )
+            for batch in dataloader_offline:
+                actions, states_and_next, rewards, terminated = batch
+                states = states_and_next["state"]
+                next_states = states_and_next["next_state"]
+                obs_buffer_off = states.cpu().numpy()
+                next_obs_buffer_off = next_states.cpu().numpy()
+                action_buffer_off = actions.cpu().numpy()
+                reward_buffer_off = (rewards.cpu().numpy().flatten() * self.scale_reward_factor)
+                terminated_buffer_off = terminated.cpu().numpy().flatten()
+            log.info(f"Loaded {len(obs_buffer_off)} offline transitions into buffer")
 
         # Start training loop
         timer = Timer()
@@ -441,21 +469,50 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 terminated_trajs = terminated_trajs.reshape(-1)
                 for _ in range(num_batch):
 
-                    # Sample batch
-                    inds = np.random.choice(len(obs_trajs), self.batch_size)
-                    obs_b = torch.from_numpy(obs_trajs[inds]).float().to(self.device)
-                    next_obs_b = (
-                        torch.from_numpy(next_obs_trajs[inds]).float().to(self.device)
-                    )
-                    actions_b = (
-                        torch.from_numpy(action_trajs[inds]).float().to(self.device)
-                    )
-                    reward_b = (
-                        torch.from_numpy(reward_trajs[inds]).float().to(self.device)
-                    )
-                    terminated_b = (
-                        torch.from_numpy(terminated_trajs[inds]).float().to(self.device)
-                    )
+                    # Sample batch - mix offline and online data
+                    if self.use_offline_data and len(obs_buffer) > 0:
+                        # Calculate batch sizes for offline and online
+                        n_offline = int(self.batch_size * self.offline_ratio)
+                        n_online = self.batch_size - n_offline
+                        
+                        # Sample from OFFLINE buffer
+                        inds_off = np.random.choice(len(obs_buffer_off), n_offline)
+                        obs_b_off = torch.from_numpy(obs_buffer_off[inds_off]).float().to(self.device)
+                        next_obs_b_off = torch.from_numpy(next_obs_buffer_off[inds_off]).float().to(self.device)
+                        actions_b_off = torch.from_numpy(action_buffer_off[inds_off]).float().to(self.device)
+                        reward_b_off = torch.from_numpy(reward_buffer_off[inds_off]).float().to(self.device)
+                        terminated_b_off = torch.from_numpy(terminated_buffer_off[inds_off]).float().to(self.device)
+                        
+                        # Sample from ONLINE buffer
+                        inds_on = np.random.choice(len(obs_trajs), n_online)
+                        obs_b_on = torch.from_numpy(obs_trajs[inds_on]).float().to(self.device)
+                        next_obs_b_on = torch.from_numpy(next_obs_trajs[inds_on]).float().to(self.device)
+                        actions_b_on = torch.from_numpy(action_trajs[inds_on]).float().to(self.device)
+                        reward_b_on = torch.from_numpy(reward_trajs[inds_on]).float().to(self.device)
+                        terminated_b_on = torch.from_numpy(terminated_trajs[inds_on]).float().to(self.device)
+                        
+                        # Merge offline and online data
+                        obs_b = torch.cat([obs_b_off, obs_b_on], dim=0)
+                        next_obs_b = torch.cat([next_obs_b_off, next_obs_b_on], dim=0)
+                        actions_b = torch.cat([actions_b_off, actions_b_on], dim=0)
+                        reward_b = torch.cat([reward_b_off, reward_b_on], dim=0)
+                        terminated_b = torch.cat([terminated_b_off, terminated_b_on], dim=0)
+                    elif self.use_offline_data and len(obs_buffer) == 0:
+                        # Only offline data available (early in training)
+                        inds = np.random.choice(len(obs_buffer_off), self.batch_size)
+                        obs_b = torch.from_numpy(obs_buffer_off[inds]).float().to(self.device)
+                        next_obs_b = torch.from_numpy(next_obs_buffer_off[inds]).float().to(self.device)
+                        actions_b = torch.from_numpy(action_buffer_off[inds]).float().to(self.device)
+                        reward_b = torch.from_numpy(reward_buffer_off[inds]).float().to(self.device)
+                        terminated_b = torch.from_numpy(terminated_buffer_off[inds]).float().to(self.device)
+                    else:
+                        # Only online data (original behavior)
+                        inds = np.random.choice(len(obs_trajs), self.batch_size)
+                        obs_b = torch.from_numpy(obs_trajs[inds]).float().to(self.device)
+                        next_obs_b = torch.from_numpy(next_obs_trajs[inds]).float().to(self.device)
+                        actions_b = torch.from_numpy(action_trajs[inds]).float().to(self.device)
+                        reward_b = torch.from_numpy(reward_trajs[inds]).float().to(self.device)
+                        terminated_b = torch.from_numpy(terminated_trajs[inds]).float().to(self.device)
 
                     # update critic value function
                     critic_loss_v = self.model.loss_critic_v(

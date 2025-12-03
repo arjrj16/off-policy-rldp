@@ -10,6 +10,7 @@ logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:
 base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport/transport_pre_diffusion_mlp_ta8_td20/2024-07-08_11-18-59/checkpoint/state_8000.pt
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}/normalization.npz
+offline_dataset_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}/train.npz
 
 seed: 42
 device: cuda:0
@@ -79,6 +80,7 @@ train:
   buffer_size: 5000 # * n_envs
   replay_ratio: 128
   batch_size: 1000
+  offline_ratio: 0.5  # ratio of offline data in each batch (0.5 = 50% offline, 50% online)
   diagnostic:
     enabled: true
     env_idx: 0
@@ -117,4 +119,11 @@ model:
   obs_dim: ${obs_dim}
   action_dim: ${action_dim}
   denoising_steps: ${denoising_steps}
+  device: ${device}
+
+offline_dataset:
+  _target_: agent.dataset.sequence.StitchedSequenceQLearningDataset
+  dataset_path: ${offline_dataset_path}
+  horizon_steps: ${horizon_steps}
+  cond_steps: ${cond_steps}
   device: ${device}
