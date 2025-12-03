@@ -11,7 +11,7 @@ export DPPO_LOG_DIR=$W/off-policy-rldp/log        # where checkpoints/logs go
 export DPPO_WANDB_ENTITY=arjunmelwani-massachusetts-institute-of-technology                       # your WandB username (or set wandb=null below)
 # Suppress d4rl import warnings
 export D4RL_SUPPRESS_IMPORT_ERROR=1
-
+export HYDRA_FULL_ERROR=1
 # set up conda env for mujoco to work:
 # module load miniforge/24.3.0-0
 # conda activate mjgl
@@ -52,8 +52,13 @@ export MUJOCO_GL=egl
 #     --config-dir=cfg/gym/scratch/hopper-v2
 
 # # Option 6: Robomimic - transport
-uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
-    --config-dir=cfg/robomimic/finetune/transport 
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+#     --config-dir=cfg/robomimic/finetune/transport 
+
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+#     --config-dir=cfg/robomimic/finetune/square 
+
+
 
 # # Option 7: push-t - IDQL
 # uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
@@ -64,5 +69,5 @@ uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 #     --config-dir=cfg/pusht/finetune
 
 # transport pretrain
-# uv run python script/run.py --config-name=pre_diffusion_mlp \
-#     --config-dir=cfg/robomimic/pretrain/transport
+uv run python script/run.py --config-name=pre_diffusion_mlp \
+    --config-dir=cfg/robomimic/pretrain/transport
