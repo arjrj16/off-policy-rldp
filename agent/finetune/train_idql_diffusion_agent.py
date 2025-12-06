@@ -83,6 +83,12 @@ class TrainIDQLDiffusionAgent(TrainAgent):
         # Actor params
         self.use_expectile_exploration = cfg.train.use_expectile_exploration
 
+        # BC warm-up for sparse reward tasks
+        self.use_bc_warmup = cfg.train.get("use_bc_warmup", False)
+        self.bc_warmup_iters = cfg.train.get("bc_warmup_iters", 0)
+        if self.use_bc_warmup:
+            log.info(f"BC warm-up enabled: using BC policy without Q-filtering for first {self.bc_warmup_iters} iterations")
+
         # Scaling reward
         self.scale_reward_factor = cfg.train.scale_reward_factor
 
@@ -183,6 +189,9 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         .to(self.device)
                     }
                     
+                    # Determine if we should use BC warm-up
+                    use_bc_warmup_this_step = self.use_bc_warmup and (self.itr < self.bc_warmup_iters)
+                    
                     # Get action with diagnostics if enabled
                     if self.diagnostic_enabled:
                         result = self.model(
@@ -191,6 +200,7 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                             num_sample=self.num_sample,
                             use_expectile_exploration=self.use_expectile_exploration,
                             return_diagnostics=True,
+                            use_bc_warmup=use_bc_warmup_this_step,
                         )
                         samples, diag = result
                         samples = samples.cpu().numpy()
@@ -201,6 +211,7 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                                 deterministic=eval_mode and self.eval_deterministic,
                                 num_sample=self.num_sample,
                                 use_expectile_exploration=self.use_expectile_exploration,
+                                use_bc_warmup=use_bc_warmup_this_step,
                             )
                             .cpu()
                             .numpy()

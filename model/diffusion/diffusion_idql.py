@@ -137,6 +137,7 @@ class IDQLDiffusion(RWRDiffusion):
         critic_hyperparam=0.7,  # sampling weight for implicit policy
         use_expectile_exploration=True,
         return_diagnostics=False,
+        use_bc_warmup=False,
     ):
         """assume state-only, no rgb in cond
         
@@ -146,7 +147,49 @@ class IDQLDiffusion(RWRDiffusion):
                 - all_samples: (S, B, H, A) all candidate samples before Q-selection
                 - all_q: (S, B) Q-values for all samples
                 - chosen_indices: (B,) indices of chosen samples
+            use_bc_warmup: If True, sample from BC policy without Q-filtering
         """
+        # BC warm-up: sample from BC policy without Q-filtering
+        if use_bc_warmup:
+            B, T, D = cond["state"].shape
+            # Sample from BC policy (single sample per batch element)
+            bc_samples = self.sample_from_frozen_bc(
+                cond,
+                num_samples=1,
+                deterministic=deterministic,
+            )  # (1, B, H, A)
+            samples = bc_samples[0]  # (B, H, A)
+            
+            if return_diagnostics:
+                # For diagnostics, we still need to compute Q-values
+                # Sample multiple BC actions and evaluate Q-values for diagnostics
+                bc_samples_multi = self.sample_from_frozen_bc(
+                    cond,
+                    num_samples=num_sample,
+                    deterministic=deterministic,
+                )  # (S, B, H, A)
+                _, H, A = bc_samples_multi.shape[2:]
+                cond_repeat = cond["state"][None].repeat(num_sample, *(1,) * len(cond["state"].shape))
+                cond_repeat = cond_repeat.view(-1, T, D)  # [B*S, T, D]
+                bc_samples_flat = bc_samples_multi.view(-1, H, A)  # [B*S, H, A]
+                
+                current_q1, current_q2 = self.target_q({"state": cond_repeat}, bc_samples_flat)
+                q = torch.min(current_q1, current_q2)
+                q = q.view(num_sample, B)
+                
+                # In BC warm-up, we use the first sample (index 0) - no Q-filtering
+                # But for diagnostics, we show all samples and their Q-values
+                chosen_indices = torch.zeros(B, dtype=torch.long, device=self.device)
+                
+                diagnostics = {
+                    "all_samples": bc_samples_multi,  # (S, B, H, A)
+                    "all_q": q,  # (S, B)
+                    "chosen_indices": chosen_indices,  # (B,) - all zeros since we use first sample
+                }
+                return samples, diagnostics
+            return samples
+        
+        # Normal Q-filtered sampling
         # repeat obs num_sample times along dim 0
         cond_shape_repeat_dims = tuple(1 for _ in cond["state"].shape)
         B, T, D = cond["state"].shape

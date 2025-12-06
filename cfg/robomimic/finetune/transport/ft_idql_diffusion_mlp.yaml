@@ -79,6 +79,10 @@ train:
   buffer_size: 5000 # * n_envs
   replay_ratio: 128
   batch_size: 1000
+  # BC warm-up for sparse reward tasks: use BC policy without Q-filtering for first N iterations
+  # This allows the agent to collect reward signals before Q-function learns
+  use_bc_warmup: True
+  bc_warmup_iters: 30  # Use BC policy for first 30 iterations
   diagnostic:
     enabled: true
     env_idx: 0
