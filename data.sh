@@ -1,7 +1,7 @@
 # 1. Set your data directory (adjust path as needed)
-export DPPO_DATA_DIR=/home/melwani/67920/paper-gits/dppo/data  # or wherever your data is
+export DPPO_DATA_DIR=/home/melwani/67920/code2/off-policy-rldp/data  # or wherever your data is
 
-cd /home/melwani/67920
+cd $W
 # 2. Create a temp directory for the download
 mkdir -p tmp/robomimic_download
 
@@ -16,11 +16,11 @@ wget http://downloads.cs.stanford.edu/downloads/rt_benchmark/transport/ph/low_di
 
     
 # 4. Go back to your project and run the processing script
-cd /home/melwani/67920/paper-gits/dppo  # your project directory
+cd $W/off-policy-rldp  # your project directory
 
 # Then process
 uv run python script/dataset/process_robomimic_dataset.py \
-    --load_path /home/melwani/67920/tmp/robomimic_download/low_dim.hdf5 \
+    --load_path $W/tmp/robomimic_download/low_dim.hdf5 \
     --save_dir $DPPO_DATA_DIR/robomimic/transport/ \
     --normalize
 
