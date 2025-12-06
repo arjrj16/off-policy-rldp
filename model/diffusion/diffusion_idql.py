@@ -168,7 +168,7 @@ class IDQLDiffusion(RWRDiffusion):
                     num_samples=num_sample,
                     deterministic=deterministic,
                 )  # (S, B, H, A)
-                _, H, A = bc_samples_multi.shape[2:]
+                H, A = bc_samples_multi.shape[2:]
                 cond_repeat = cond["state"][None].repeat(num_sample, *(1,) * len(cond["state"].shape))
                 cond_repeat = cond_repeat.view(-1, T, D)  # [B*S, T, D]
                 bc_samples_flat = bc_samples_multi.view(-1, H, A)  # [B*S, H, A]
