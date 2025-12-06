@@ -1,5 +1,5 @@
 # 1. Set your data directory (adjust path as needed)
-export DPPO_DATA_DIR=/home/melwani/67920/code2/off-policy-rldp/data  # or wherever your data is
+export DPPO_DATA_DIR=$W/off-policy-rldp/data  # or wherever your data is
 
 cd $W
 # 2. Create a temp directory for the download
