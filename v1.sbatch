@@ -14,11 +14,11 @@ set -e -o pipefail
 source ~/.bashrc
 
 # Go to DPPO project directory
-cd /home/melwani/67920/paper-gits/dppo
+cd /home/melwani/67920/paper-gits/code2/off-policy-rldp
 
 # Set required environment variables
-export DPPO_DATA_DIR=/home/melwani/67920/paper-gits/dppo/data      # where datasets/normalization are stored
-export DPPO_LOG_DIR=/home/melwani/67920/paper-gits/dppo/log        # where checkpoints/logs go
+export DPPO_DATA_DIR=/home/melwani/67920/paper-gits/code2/off-policy-rldp/data      # where datasets/normalization are stored
+export DPPO_LOG_DIR=/home/melwani/67920/paper-gits/code2/off-policy-rldp/log        # where checkpoints/logs go
 export DPPO_WANDB_ENTITY=arjunmelwani-massachusetts-institute-of-technology                       # your WandB username (or set wandb=null below)
 # Suppress d4rl import warnings
 export D4RL_SUPPRESS_IMPORT_ERROR=1
@@ -40,8 +40,8 @@ export MUJOCO_GL=egl
 # ============================================
 
 # Option 1: Gym - Hopper (fine-tune pre-trained policy)
-# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
-#     --config-dir=cfg/gym/finetune/hopper-v2 
+uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+    --config-dir=cfg/gym/finetune/hopper-v2 
     
 # Option 2: Gym - Walker2D
 # uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
