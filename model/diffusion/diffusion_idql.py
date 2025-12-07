@@ -149,10 +149,8 @@ class IDQLDiffusion(RWRDiffusion):
                 - chosen_indices: (B,) indices of chosen samples
             use_bc_warmup: If True, sample from BC policy without Q-filtering
         """
-        # BC warm-up: sample from BC policy without Q-filtering
         if use_bc_warmup:
             B, T, D = cond["state"].shape
-            # Sample from BC policy (single sample per batch element)
             bc_samples = self.sample_from_frozen_bc(
                 cond,
                 num_samples=1,
@@ -162,7 +160,6 @@ class IDQLDiffusion(RWRDiffusion):
             
             if return_diagnostics:
                 # For diagnostics, we still need to compute Q-values
-                # Sample multiple BC actions and evaluate Q-values for diagnostics
                 bc_samples_multi = self.sample_from_frozen_bc(
                     cond,
                     num_samples=num_sample,
@@ -177,8 +174,6 @@ class IDQLDiffusion(RWRDiffusion):
                 q = torch.min(current_q1, current_q2)
                 q = q.view(num_sample, B)
                 
-                # In BC warm-up, we use the first sample (index 0) - no Q-filtering
-                # But for diagnostics, we show all samples and their Q-values
                 chosen_indices = torch.zeros(B, dtype=torch.long, device=self.device)
                 
                 diagnostics = {
@@ -189,7 +184,6 @@ class IDQLDiffusion(RWRDiffusion):
                 return samples, diagnostics
             return samples
         
-        # Normal Q-filtered sampling
         # repeat obs num_sample times along dim 0
         cond_shape_repeat_dims = tuple(1 for _ in cond["state"].shape)
         B, T, D = cond["state"].shape
