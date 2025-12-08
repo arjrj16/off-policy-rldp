@@ -133,8 +133,9 @@ class IDQLDiffusion(RWRDiffusion):
         """assume state-only, no rgb in cond"""
         # repeat obs num_sample times along dim 0
         cond_shape_repeat_dims = tuple(1 for _ in cond["state"].shape)
-        B, T, D = cond["state"].shape
+        B_temp, T, D = cond["state"].shape
         S = num_sample
+        
         cond_repeat = cond["state"][None].repeat(num_sample, *cond_shape_repeat_dims)
         cond_repeat = cond_repeat.view(-1, T, D)  # [B*S, T, D]
 
