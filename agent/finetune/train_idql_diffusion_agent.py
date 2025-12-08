@@ -7,6 +7,7 @@ Do not support pixel input right now.
 
 import os
 import pickle
+import csv
 import einops
 import numpy as np
 import torch
@@ -82,6 +83,12 @@ class TrainIDQLDiffusionAgent(TrainAgent):
         # Actor params
         self.use_expectile_exploration = cfg.train.use_expectile_exploration
 
+        # BC warm-up for sparse reward tasks
+        self.use_bc_warmup = cfg.train.get("use_bc_warmup", False)
+        self.bc_warmup_iters = cfg.train.get("bc_warmup_iters", 0)
+        if self.use_bc_warmup:
+            log.info(f"BC warm-up enabled: using BC policy without Q-filtering for first {self.bc_warmup_iters} iterations")
+
         # Scaling reward
         self.scale_reward_factor = cfg.train.scale_reward_factor
 
@@ -94,6 +101,29 @@ class TrainIDQLDiffusionAgent(TrainAgent):
 
         # Sampling
         self.num_sample = cfg.train.eval_sample_num
+        
+        # Diagnostic tracking
+        self.diagnostic_enabled = cfg.train.get("diagnostic", {}).get("enabled", False)
+        self.diagnostic_env_idx = cfg.train.get("diagnostic", {}).get("env_idx", 0)
+        self.diagnostic_bc_num_samples = cfg.train.get("diagnostic", {}).get("bc_num_samples", 64)
+        if self.diagnostic_enabled:
+            log.info(f"q tracking enabled for environment {self.diagnostic_env_idx}")
+            # Initialize CSV file for step-level diagnostics
+            self.diagnostic_csv_path = os.path.join(self.logdir, "diagnostics.csv")
+            self._diag_csv_f = open(self.diagnostic_csv_path, "w", newline="")
+            csv_fieldnames = [
+                "itr", "global_env_step",
+                "episode_id", "t_in_episode",
+                "reward_scaled", "rtg",
+                "q_exec", "q_argmax",
+                "support_exec", "support_argmax",
+                "oe_exec", "oe_argmax",
+                "eval_mode", "task"
+            ]
+            self._diag_csv = csv.DictWriter(self._diag_csv_f, fieldnames=csv_fieldnames)
+            self._diag_csv.writeheader()
+            self._diag_csv_f.flush()
+            self._diag_episode_counter = 0
 
     def run(self):
 
@@ -110,6 +140,10 @@ class TrainIDQLDiffusionAgent(TrainAgent):
         cnt_train_step = 0
         last_itr_eval = False
         done_venv = np.zeros((1, self.n_envs))
+        
+        diag_current_episode = None
+        diag_episode_data = []
+        
         while self.itr < self.n_train_itr:
 
             # Prepare video paths for each envs --- only applies for the first set of episodes if allowing reset within iteration and each iteration has multiple episodes from one env
@@ -127,13 +161,20 @@ class TrainIDQLDiffusionAgent(TrainAgent):
 
             # Reset env before iteration starts (1) if specified, (2) at eval mode, or (3) right after eval mode
             firsts_trajs = np.zeros((self.n_steps + 1, self.n_envs))
-            if self.reset_at_iteration or eval_mode or last_itr_eval:
+            forced_reset_this_itr = self.reset_at_iteration or eval_mode or last_itr_eval
+            if forced_reset_this_itr:
                 prev_obs_venv = self.reset_env_all(options_venv=options_venv)
                 firsts_trajs[0] = 1
+                # If we forced a reset, any ongoing diagnostic episode is aborted (truncated)
+                if self.diagnostic_enabled and diag_current_episode is not None:
+                    # Tag and drop aborted episode (don't include in metrics - it's corrupted)
+                    diag_current_episode = None
             else:
                 # if done at the end of last iteration, the envs are just reset
                 firsts_trajs[0] = done_venv
             reward_trajs = np.zeros((self.n_steps, self.n_envs))
+            
+            diag_episode_data_this_itr = []
 
             # Collect a set of trajectories from env
             for step in range(self.n_steps):
@@ -147,17 +188,107 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         .float()
                         .to(self.device)
                     }
-                    samples = (
-                        self.model(
+                    
+                    # Determine if we should use BC warm-up
+                    use_bc_warmup_this_step = self.use_bc_warmup and (self.itr < self.bc_warmup_iters)
+                    
+                    # Get action with diagnostics if enabled
+                    if self.diagnostic_enabled:
+                        result = self.model(
                             cond=cond,
                             deterministic=eval_mode and self.eval_deterministic,
                             num_sample=self.num_sample,
                             use_expectile_exploration=self.use_expectile_exploration,
+                            return_diagnostics=True,
+                            use_bc_warmup=use_bc_warmup_this_step,
                         )
-                        .cpu()
-                        .numpy()
-                    )  # n_env x horizon x act
+                        samples, diag = result
+                        samples = samples.cpu().numpy()
+                    else:
+                        samples = (
+                            self.model(
+                                cond=cond,
+                                deterministic=eval_mode and self.eval_deterministic,
+                                num_sample=self.num_sample,
+                                use_expectile_exploration=self.use_expectile_exploration,
+                                use_bc_warmup=use_bc_warmup_this_step,
+                            )
+                            .cpu()
+                            .numpy()
+                        )  # n_env x horizon x act
+                        diag = None
+                    
                 action_venv = samples[:, : self.act_steps]
+                
+                # Compute diagnostics for tracked environment
+                if self.diagnostic_enabled and diag is not None and self.diagnostic_env_idx < self.n_envs:
+                    # Check if episode is still active (not done from previous step)
+                    # BUT: if this is a new episode start, env_was_done should be False
+                    env_was_done = done_venv[self.diagnostic_env_idx] if step > 0 else False
+                    
+                    if firsts_trajs[step, self.diagnostic_env_idx] == 1:
+                        if diag_current_episode is not None:
+                            log.warning(f"Starting new episode but diag_current_episode exists at step {step}, itr {self.itr}")
+                            diag_current_episode = None
+                        diag_current_episode = {
+                            "q_start": None,
+                            "rewards": [],
+                            "q_exec": [],
+                            "q_argmax": [],
+                            "support_exec": [],
+                            "support_argmax": [],
+                            "step": step,
+                            "itr": self.itr,
+                            "episode_id": self._diag_episode_counter,
+                        }
+                        self._diag_episode_counter += 1
+                        # Reset env_was_done for new episode - we want to compute Q/support for the first step
+                        env_was_done = False
+                    
+                    # Compute Q-value for chosen action (for env 0) - only if episode is active
+                    if diag_current_episode is not None and not env_was_done:
+                        # Get Q-values: both executed and argmax
+                        chosen_idx = diag["chosen_indices"][self.diagnostic_env_idx].item()
+                        q_exec = diag["all_q"][chosen_idx, self.diagnostic_env_idx].item()
+                        
+                        # Get argmax Q-value
+                        q_col = diag["all_q"][:, self.diagnostic_env_idx]  # (S,)
+                        argmax_idx = int(torch.argmax(q_col).item())
+                        q_argmax = float(q_col[argmax_idx].item())
+                        
+                        # Store Q at episode start (use executed Q)
+                        if diag_current_episode["q_start"] is None:
+                            diag_current_episode["q_start"] = q_exec
+                        
+                        # Sample from frozen BC to compute support distance
+                        cond_env0 = {
+                            "state": cond["state"][self.diagnostic_env_idx:self.diagnostic_env_idx+1]  # (1, T, D)
+                        }
+                        bc_samples = self.model.sample_from_frozen_bc(
+                            cond_env0,
+                            num_samples=self.diagnostic_bc_num_samples,
+                            deterministic=False,
+                        )  # (num_samples, 1, H, A)
+                        bc = bc_samples[:, 0, :self.act_steps, :]  # (K, act_steps, A)
+                        
+                        # Get actions from all_samples (torch tensor) for consistency
+                        all_samples = diag["all_samples"]  # (S, B, H, A)
+                        a_exec = all_samples[chosen_idx, self.diagnostic_env_idx, :self.act_steps, :]  # (act_steps, A)
+                        a_argmax = all_samples[argmax_idx, self.diagnostic_env_idx, :self.act_steps, :]  # (act_steps, A)
+                        
+                        # Compute support distance for both actions
+                        def min_l2_to_bc(a):  # a: (act_steps, A)
+                            diff = bc - a.unsqueeze(0)  # (K, act_steps, A)
+                            d2 = (diff ** 2).sum(dim=(1, 2))
+                            return float(torch.sqrt(d2.min()).item())
+                        
+                        support_exec = min_l2_to_bc(a_exec)
+                        support_argmax = min_l2_to_bc(a_argmax)
+                        
+                        diag_current_episode["q_exec"].append(q_exec)
+                        diag_current_episode["q_argmax"].append(q_argmax)
+                        diag_current_episode["support_exec"].append(support_exec)
+                        diag_current_episode["support_argmax"].append(support_argmax)
 
                 # Apply multi-step action
                 obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = (
@@ -166,6 +297,71 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 done_venv = terminated_venv | truncated_venv
                 reward_trajs[step] = reward_venv
                 firsts_trajs[step + 1] = done_venv
+                
+                if self.diagnostic_enabled and diag_current_episode is not None:
+                    # Store scaled reward
+                    r = reward_venv[self.diagnostic_env_idx] * self.scale_reward_factor
+                    diag_current_episode["rewards"].append(float(r))
+                    
+                    if done_venv[self.diagnostic_env_idx]:
+                        if len(diag_current_episode["rewards"]) > 0:
+                            # Compute discounted return (scaled rewards already stored)
+                            rewards = diag_current_episode["rewards"]  # already scaled
+                            G0 = 0.0
+                            g = 1.0
+                            for r in rewards:
+                                G0 += g * r
+                                g *= self.gamma
+                            
+                            diag_current_episode["return_real"] = G0  # discounted, scaled
+                            if diag_current_episode["q_start"] is not None:
+                                diag_current_episode["overestimation"] = diag_current_episode["q_start"] - G0
+                            
+                            # Compute per-step return-to-go
+                            rtg = [0.0] * len(rewards)
+                            running = 0.0
+                            for t in reversed(range(len(rewards))):
+                                running = rewards[t] + self.gamma * running
+                                rtg[t] = running
+                            diag_current_episode["rtg"] = rtg
+                            
+                            # Compute support distance stats
+                            if len(diag_current_episode["support_exec"]) > 0:
+                                diag_current_episode["avg_support_exec"] = np.mean(diag_current_episode["support_exec"])
+                                diag_current_episode["max_support_exec"] = np.max(diag_current_episode["support_exec"])
+                                diag_current_episode["avg_support_argmax"] = np.mean(diag_current_episode["support_argmax"])
+                                diag_current_episode["max_support_argmax"] = np.max(diag_current_episode["support_argmax"])
+                            
+                            # Write CSV rows for this episode
+                            episode_id = diag_current_episode["episode_id"]
+                            itr = diag_current_episode["itr"]
+                            task = getattr(self, "env_name", "unknown")
+                            
+                            for t in range(len(rewards)):
+                                oe_exec = diag_current_episode["q_exec"][t] - rtg[t] if t < len(diag_current_episode["q_exec"]) else 0.0
+                                oe_argmax = diag_current_episode["q_argmax"][t] - rtg[t] if t < len(diag_current_episode["q_argmax"]) else 0.0
+                                
+                                row = {
+                                    "itr": itr,
+                                    "global_env_step": cnt_train_step,
+                                    "episode_id": episode_id,
+                                    "t_in_episode": t,
+                                    "reward_scaled": rewards[t],
+                                    "rtg": rtg[t],
+                                    "q_exec": diag_current_episode["q_exec"][t] if t < len(diag_current_episode["q_exec"]) else 0.0,
+                                    "q_argmax": diag_current_episode["q_argmax"][t] if t < len(diag_current_episode["q_argmax"]) else 0.0,
+                                    "support_exec": diag_current_episode["support_exec"][t] if t < len(diag_current_episode["support_exec"]) else 0.0,
+                                    "support_argmax": diag_current_episode["support_argmax"][t] if t < len(diag_current_episode["support_argmax"]) else 0.0,
+                                    "oe_exec": oe_exec,
+                                    "oe_argmax": oe_argmax,
+                                    "eval_mode": 1 if eval_mode else 0,
+                                    "task": task,
+                                }
+                                self._diag_csv.writerow(row)
+                            self._diag_csv_f.flush()
+                        
+                        diag_episode_data_this_itr.append(diag_current_episode.copy())
+                        diag_current_episode = None
 
                 # add to buffer
                 if not eval_mode:
@@ -187,6 +383,9 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 # count steps --- not acounting for done within action chunk
                 cnt_train_step += self.n_envs * self.act_steps if not eval_mode else 0
 
+            if self.diagnostic_enabled:
+                diag_episode_data.extend(diag_episode_data_this_itr)
+            
             # Summarize episode reward --- this needs to be handled differently depending on whether the environment is reset after each iteration. Only count episodes that finish within the iteration.
             episodes_start_end = []
             for env_ind in range(self.n_envs):
@@ -332,16 +531,57 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         f"eval: success rate {success_rate:8.4f} | avg episode reward {avg_episode_reward:8.4f} | avg best reward {avg_best_reward:8.4f}"
                     )
                     if self.use_wandb:
-                        wandb.log(
-                            {
-                                "success rate - eval": success_rate,
-                                "avg episode reward - eval": avg_episode_reward,
-                                "avg best reward - eval": avg_best_reward,
-                                "num episode - eval": num_episode_finished,
-                            },
-                            step=self.itr,
-                            commit=False,
-                        )
+                        log_dict = {
+                            "success rate - eval": success_rate,
+                            "avg episode reward - eval": avg_episode_reward,
+                            "avg best reward - eval": avg_best_reward,
+                            "num episode - eval": num_episode_finished,
+                        }
+                        
+                        if self.diagnostic_enabled and len(diag_episode_data) > 0:
+                            if len(diag_episode_data_this_itr) > 0:
+                                latest_ep = diag_episode_data_this_itr[-1]
+                            else:
+                                latest_ep = diag_episode_data[-1] if len(diag_episode_data) > 0 else None
+                            
+                            if latest_ep is not None and "return_real" in latest_ep:
+                                log_dict.update({
+                                    "diag/q_start": latest_ep["q_start"] if latest_ep["q_start"] is not None else 0.0,
+                                    "diag/return_real": latest_ep["return_real"],
+                                    "diag/overestimation": latest_ep.get("overestimation", 0.0),
+                                    "diag/avg_support_exec": latest_ep.get("avg_support_exec", 0.0),
+                                    "diag/max_support_exec": latest_ep.get("max_support_exec", 0.0),
+                                    "diag/avg_support_argmax": latest_ep.get("avg_support_argmax", 0.0),
+                                    "diag/max_support_argmax": latest_ep.get("max_support_argmax", 0.0),
+                                })
+                            
+                            if len(diag_episode_data) > 0:
+                                all_q_exec = []
+                                all_q_argmax = []
+                                all_support_exec = []
+                                all_support_argmax = []
+                                for ep in diag_episode_data:
+                                    all_q_exec.extend(ep.get("q_exec", []))
+                                    all_q_argmax.extend(ep.get("q_argmax", []))
+                                    all_support_exec.extend(ep.get("support_exec", []))
+                                    all_support_argmax.extend(ep.get("support_argmax", []))
+                                
+                                if len(all_q_exec) > 0:
+                                    log_dict.update({
+                                        "diag/step_q_exec_mean": np.mean(all_q_exec),
+                                        "diag/step_q_exec_std": np.std(all_q_exec),
+                                        "diag/step_q_argmax_mean": np.mean(all_q_argmax),
+                                        "diag/step_q_argmax_std": np.std(all_q_argmax),
+                                    })
+                                if len(all_support_exec) > 0:
+                                    log_dict.update({
+                                        "diag/step_support_exec_mean": np.mean(all_support_exec),
+                                        "diag/step_support_exec_std": np.std(all_support_exec),
+                                        "diag/step_support_argmax_mean": np.mean(all_support_argmax),
+                                        "diag/step_support_argmax_std": np.std(all_support_argmax),
+                                    })
+                        
+                        wandb.log(log_dict, step=self.itr, commit=False)
                     run_results[-1]["eval_success_rate"] = success_rate
                     run_results[-1]["eval_episode_reward"] = avg_episode_reward
                     run_results[-1]["eval_best_reward"] = avg_best_reward
@@ -350,17 +590,58 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         f"{self.itr}: step {cnt_train_step:8d} | loss actor {loss_actor:8.4f} | reward {avg_episode_reward:8.4f} | t:{time:8.4f}"
                     )
                     if self.use_wandb:
-                        wandb.log(
-                            {
-                                "total env step": cnt_train_step,
-                                "loss - actor": loss_actor,
-                                "loss - critic": loss_critic,
-                                "avg episode reward - train": avg_episode_reward,
-                                "num episode - train": num_episode_finished,
-                            },
-                            step=self.itr,
-                            commit=True,
-                        )
+                        log_dict = {
+                            "total env step": cnt_train_step,
+                            "loss - actor": loss_actor,
+                            "loss - critic": loss_critic,
+                            "avg episode reward - train": avg_episode_reward,
+                            "num episode - train": num_episode_finished,
+                        }
+                        
+                        if self.diagnostic_enabled and len(diag_episode_data) > 0:
+                            if len(diag_episode_data_this_itr) > 0:
+                                latest_ep = diag_episode_data_this_itr[-1]
+                            else:
+                                latest_ep = diag_episode_data[-1] if len(diag_episode_data) > 0 else None
+                            
+                            if latest_ep is not None and "return_real" in latest_ep:
+                                log_dict.update({
+                                    "diag/q_start": latest_ep["q_start"] if latest_ep["q_start"] is not None else 0.0,
+                                    "diag/return_real": latest_ep["return_real"],
+                                    "diag/overestimation": latest_ep.get("overestimation", 0.0),
+                                    "diag/avg_support_exec": latest_ep.get("avg_support_exec", 0.0),
+                                    "diag/max_support_exec": latest_ep.get("max_support_exec", 0.0),
+                                    "diag/avg_support_argmax": latest_ep.get("avg_support_argmax", 0.0),
+                                    "diag/max_support_argmax": latest_ep.get("max_support_argmax", 0.0),
+                                })
+                            
+                            if len(diag_episode_data) > 0:
+                                all_q_exec = []
+                                all_q_argmax = []
+                                all_support_exec = []
+                                all_support_argmax = []
+                                for ep in diag_episode_data:
+                                    all_q_exec.extend(ep.get("q_exec", []))
+                                    all_q_argmax.extend(ep.get("q_argmax", []))
+                                    all_support_exec.extend(ep.get("support_exec", []))
+                                    all_support_argmax.extend(ep.get("support_argmax", []))
+                                
+                                if len(all_q_exec) > 0:
+                                    log_dict.update({
+                                        "diag/step_q_exec_mean": np.mean(all_q_exec),
+                                        "diag/step_q_exec_std": np.std(all_q_exec),
+                                        "diag/step_q_argmax_mean": np.mean(all_q_argmax),
+                                        "diag/step_q_argmax_std": np.std(all_q_argmax),
+                                    })
+                                if len(all_support_exec) > 0:
+                                    log_dict.update({
+                                        "diag/step_support_exec_mean": np.mean(all_support_exec),
+                                        "diag/step_support_exec_std": np.std(all_support_exec),
+                                        "diag/step_support_argmax_mean": np.mean(all_support_argmax),
+                                        "diag/step_support_argmax_std": np.std(all_support_argmax),
+                                    })
+                        
+                        wandb.log(log_dict, step=self.itr, commit=True)
                     run_results[-1]["train_episode_reward"] = avg_episode_reward
                 with open(self.result_path, "wb") as f:
                     pickle.dump(run_results, f)

@@ -1,33 +1,22 @@
-#!/bin/bash
-
-#SBATCH -J idql-train                  # job name
-#SBATCH -p mit_normal_gpu              # partition
-#SBATCH --gres=gpu:l40:1               # 1x L40 GPU
-#SBATCH -N 1                           # 1 node
-#SBATCH --cpus-per-task=16             # CPUs for parallel envs
-#SBATCH --mem=32G                      # memory
-#SBATCH -t 06:00:00                    # walltime limit
-#SBATCH -o logs/%x-%j.out              # log file
-
 set -e -o pipefail
 
 source ~/.bashrc
 
 # Go to DPPO project directory
-# cd /home/melwani/67920/paper-gits/dppo
+cd $W/off-policy-rldp/
 
 # Set required environment variables
-# export DPPO_DATA_DIR=/home/melwani/67920/paper-gits/dppo/data      # where datasets/normalization are stored
-# export DPPO_LOG_DIR=/home/melwani/67920/paper-gits/dppo/log        # where checkpoints/logs go
-export DPPO_WANDB_ENTITY=sarahpan888                      # your WandB username (or set wandb=null below)
-export DPPO_DATA_DIR=/home/sarahpan/off-policy-rldp/dppo/data
-export DPPO_LOG_DIR=/home/sarahpan/off-policy-rldp/dppo/log
+export DPPO_DATA_DIR=$W/off-policy-rldp/data      # where datasets/normalization are stored
+export DPPO_LOG_DIR=$W/off-policy-rldp/log        # where checkpoints/logs go
+export DPPO_WANDB_ENTITY=arjunmelwani-massachusetts-institute-of-technology                       # your WandB username (or set wandb=null below)
 # Suppress d4rl import warnings
 export D4RL_SUPPRESS_IMPORT_ERROR=1
 
 # set up conda env for mujoco to work:
-module load miniforge/24.3.0-0
-conda activate mjgl
+# module load miniforge/24.3.0-0
+# conda activate mjgl
+
+export CUDA_VISIBLE_DEVICES=0
 
 export CPATH="$CONDA_PREFIX/include:${CPATH:-}"
 export LIBRARY_PATH="$CONDA_PREFIX/lib:${LIBRARY_PATH:-}"
@@ -67,12 +56,12 @@ uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
     --config-dir=cfg/robomimic/finetune/transport 
 
 # # Option 7: push-t - IDQL
-uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
-    --config-dir=cfg/pusht/finetune
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+#     --config-dir=cfg/pusht/finetune
 
 # # Option 8: push-t - DPPO
-uv run python script/run.py --config-name=ft_ppo_diffusion_mlp \
-    --config-dir=cfg/pusht/finetune
+# uv run python script/run.py --config-name=ft_ppo_diffusion_mlp \
+#     --config-dir=cfg/pusht/finetune
 
 # transport pretrain
 # uv run python script/run.py --config-name=pre_diffusion_mlp \

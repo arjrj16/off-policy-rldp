@@ -79,6 +79,12 @@ train:
   buffer_size: 5000 # * n_envs
   replay_ratio: 128
   batch_size: 1000
+  use_bc_warmup: True
+  bc_warmup_iters: 30
+  diagnostic:
+    enabled: true
+    env_idx: 0
+    bc_num_samples: 8
 
 model:
   _target_: model.diffusion.diffusion_idql.IDQLDiffusion
