@@ -16,11 +16,15 @@ export D4RL_SUPPRESS_IMPORT_ERROR=1
 # module load miniforge/24.3.0-0
 # conda activate mjgl
 
-export CUDA_VISIBLE_DEVICES=0
+# export CUDA_VISIBLE_DEVICES=0
 
-export CPATH="$CONDA_PREFIX/include:${CPATH:-}"
-export LIBRARY_PATH="$CONDA_PREFIX/lib:${LIBRARY_PATH:-}"
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+# export CPATH="$CONDA_PREFIX/include:${CPATH:-}"
+# export LIBRARY_PATH="$CONDA_PREFIX/lib:${LIBRARY_PATH:-}"
+# export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+
+export MUJOCO_PY_MUJOCO_PATH=/root/.mujoco/mujoco210
+export LD_LIBRARY_PATH=/root/.mujoco/mujoco210/bin:${LD_LIBRARY_PATH:-}
+
 
 # Headless rendering:
 export MUJOCO_GL=egl
