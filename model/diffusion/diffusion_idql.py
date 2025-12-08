@@ -82,7 +82,7 @@ class IDQLDiffusion(RWRDiffusion):
 
         # terminal state mask or truncated state mask
         if self.mask_truncated:
-            mask = 1 - (terminated | truncated)
+            mask = 1 - (terminated.bool() | truncated.bool()).float()
         else:
             mask = 1 - terminated
 
