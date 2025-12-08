@@ -81,6 +81,7 @@ train:
   batch_size: 1000
   use_bc_warmup: True
   bc_warmup_iters: 30
+  mask_truncated: True  # true = mask bootstrap r of trajs that are truncated and terminated, false = mask only terminated trajs
   diagnostic:
     enabled: true
     env_idx: 0
@@ -91,7 +92,7 @@ model:
   # Sampling HPs
   min_sampling_denoising_std: 0.1
   randn_clip_value: 3
-  #
+  mask_truncated: ${train.mask_truncated}
   network_path: ${base_policy_path}
   actor:
     _target_: model.diffusion.mlp_diffusion.DiffusionMLP

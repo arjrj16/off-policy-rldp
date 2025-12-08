@@ -28,6 +28,7 @@ class IDQLDiffusion(RWRDiffusion):
         actor,
         critic_q,
         critic_v,
+        mask_truncated=False,
         **kwargs,
     ):
         super().__init__(network=actor, **kwargs)
@@ -37,6 +38,9 @@ class IDQLDiffusion(RWRDiffusion):
 
         # assign actor
         self.actor = self.network
+        
+        # true = mask bootstrap r of trajs that are truncated and terminated, false = mask only terminated trajs
+        self.mask_truncated = mask_truncated
         
         # Create frozen copy of BC actor for diagnostic support distance computation
         self.bc_actor_frozen = copy.deepcopy(actor).to(self.device)
@@ -67,7 +71,7 @@ class IDQLDiffusion(RWRDiffusion):
         v_loss = expectile_loss(adv).mean()
         return v_loss
 
-    def loss_critic_q(self, obs, next_obs, actions, rewards, terminated, gamma):
+    def loss_critic_q(self, obs, next_obs, actions, rewards, terminated, truncated, gamma):
 
         # get current Q-function
         current_q1, current_q2 = self.critic_q(obs, actions)
@@ -76,8 +80,11 @@ class IDQLDiffusion(RWRDiffusion):
         with torch.no_grad():
             next_v = self.critic_v(next_obs)
 
-        # terminal state mask
-        mask = 1 - terminated
+        # terminal state mask or truncated state mask
+        if self.mask_truncated:
+            mask = 1 - (terminated | truncated)
+        else:
+            mask = 1 - terminated
 
         # flatten
         rewards = rewards.view(-1)

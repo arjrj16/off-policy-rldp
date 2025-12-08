@@ -133,7 +133,7 @@ class TrainIDQLDiffusionAgent(TrainAgent):
         action_buffer = deque(maxlen=self.buffer_size)
         reward_buffer = deque(maxlen=self.buffer_size)
         terminated_buffer = deque(maxlen=self.buffer_size)
-
+        truncated_buffer = deque(maxlen=self.buffer_size)
         # Start training loop
         timer = Timer()
         run_results = []
@@ -376,6 +376,7 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                     action_buffer.append(action_venv)
                     reward_buffer.append(reward_venv * self.scale_reward_factor)
                     terminated_buffer.append(terminated_venv)
+                    truncated_buffer.append(truncated_venv)
 
                 # update for next step
                 prev_obs_venv = obs_venv
@@ -434,7 +435,7 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 next_obs_trajs = np.array(deepcopy(next_obs_buffer))
                 reward_trajs = np.array(deepcopy(reward_buffer))
                 terminated_trajs = np.array(deepcopy(terminated_buffer))
-
+                truncated_trajs = np.array(deepcopy(truncated_buffer))
                 # flatten
                 obs_trajs = einops.rearrange(
                     obs_trajs,
@@ -450,6 +451,7 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 )
                 reward_trajs = reward_trajs.reshape(-1)
                 terminated_trajs = terminated_trajs.reshape(-1)
+                truncated_trajs = truncated_trajs.reshape(-1)
                 for _ in range(num_batch):
 
                     # Sample batch
@@ -467,6 +469,9 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                     terminated_b = (
                         torch.from_numpy(terminated_trajs[inds]).float().to(self.device)
                     )
+                    truncated_b = (
+                        torch.from_numpy(truncated_trajs[inds]).float().to(self.device)
+                    )
 
                     # update critic value function
                     critic_loss_v = self.model.loss_critic_v(
@@ -483,6 +488,7 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         actions_b,
                         reward_b,
                         terminated_b,
+                        truncated_b,
                         self.gamma,
                     )
                     self.critic_q_optimizer.zero_grad()
