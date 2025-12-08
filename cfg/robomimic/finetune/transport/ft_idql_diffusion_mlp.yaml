@@ -50,7 +50,7 @@ wandb:
 
 train:
   n_train_itr: 201
-  n_critic_warmup_itr: 5
+  n_critic_warmup_itr: ${eval:'${train.bc_warmup_iters} + 5'}
   n_steps: 400
   gamma: 0.999
   actor_lr: 1e-5
