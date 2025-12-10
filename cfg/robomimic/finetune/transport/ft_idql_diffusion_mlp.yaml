@@ -81,7 +81,7 @@ train:
   batch_size: 1000
   use_bc_warmup: True
   bc_warmup_iters: 30
-  mask_truncated: True  # true = mask bootstrap r of trajs that are truncated and terminated, false = mask only terminated trajs
+  mask_truncated: False  # true = mask bootstrap r of trajs that are truncated and terminated, false = mask only terminated trajs
   diagnostic:
     enabled: true
     env_idx: 0

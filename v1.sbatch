@@ -20,12 +20,18 @@ cd $W/off-policy-rldp
 export DPPO_DATA_DIR=$W/off-policy-rldp/data      # where datasets/normalization are stored
 export DPPO_LOG_DIR=$W/off-policy-rldp/log        # where checkpoints/logs go
 export DPPO_WANDB_ENTITY=arjunmelwani-massachusetts-institute-of-technology                       # your WandB username (or set wandb=null below)
+# export WANDB_ENTITY=sarahpan888
+# export WANDB_PROJECT=gym-walker2d-medium-v2-finetune
+
 # Suppress d4rl import warnings
 export D4RL_SUPPRESS_IMPORT_ERROR=1
 
 # set up conda env for mujoco to work:
 module load miniforge/24.3.0-0
 conda activate mjgl
+
+export CUDA_VISIBLE_DEVICES=1
+
 
 export CPATH="$CONDA_PREFIX/include:${CPATH:-}"
 export LIBRARY_PATH="$CONDA_PREFIX/lib:${LIBRARY_PATH:-}"
@@ -61,8 +67,13 @@ export MUJOCO_GL=egl
 #     --config-dir=cfg/gym/scratch/hopper-v2
 
 # # Option 6: Robomimic - transport
-uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
-    --config-dir=cfg/robomimic/finetune/transport 
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+#     --config-dir=cfg/robomimic/finetune/transport 
+
+# square
+uv run python script/run.py --config-name=ft_ppo_diffusion_mlp \
+    --config-dir=cfg/robomimic/finetune/square 
+
 
 # # Option 7: push-t - IDQL
 # uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
