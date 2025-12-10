@@ -203,6 +203,7 @@ class IDQLDiffusion(RWRDiffusion):
         # get current Q-function
         current_q1, current_q2 = self.target_q({"state": cond_repeat}, samples)
         q = torch.min(current_q1, current_q2)
+        B = B_temp
         q = q.view(S, B)
 
         # Use argmax
