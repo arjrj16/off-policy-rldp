@@ -124,6 +124,144 @@ class TrainIDQLDiffusionAgent(TrainAgent):
             self._diag_csv.writeheader()
             self._diag_csv_f.flush()
             self._diag_episode_counter = 0
+        
+        # Argmax-Q trajectory visualization (for IDQL stability plots)
+        argmax_cfg = cfg.train.get("argmax_traj", {})
+        # Turn this on to dump argmax-Q rollouts to npz
+        self.argmax_traj_enabled = argmax_cfg.get("enabled", False)
+        # Collect at itr == 0 and then every `freq` itrs if > 0
+        self.argmax_traj_freq = argmax_cfg.get("freq", 0)
+        # How many environment steps to roll out when collecting trajectories
+        self.argmax_traj_steps = argmax_cfg.get("steps", self.n_steps)
+        # How many candidate actions to sample per state when searching for argmax-Q
+        self.argmax_traj_num_sample = argmax_cfg.get("num_sample", self.num_sample)
+
+    @torch.no_grad()
+    def rollout_argmax_trajectories(self, itr_tag: int) -> None:
+        """
+        Roll out the current IDQL policy using, at each state, the action
+        sample with maximal Q-value. Saves states (and per-env Q entropies)
+        to an .npz file in self.logdir so you can make DPPO-style plots.
+
+        The resulting file has:
+            states:   [T, n_env, H, D]
+            q_entropy:[T, n_env]    (Shannon entropy over the S Q-samples)
+        """
+        if not getattr(self, "venv", None):
+            log.warning("No vector env attached; cannot collect argmax trajectories.")
+            return
+
+        log.info(
+            f"[ArgmaxTraj] Collecting argmax-Q trajectories at itr={itr_tag} "
+            f"for {self.argmax_traj_steps} steps"
+        )
+
+        self.model.eval()
+
+        # Fresh reset for all envs so this doesn't depend on training rollouts
+        
+        # DEBUG: Test different vs same seeds
+        options_venv_different = [{'seed': 42 + i} for i in range(self.n_envs)]
+        options_venv_same = [{'seed': 42} for i in range(self.n_envs)]
+
+        print(f"[DEBUG] Testing different seeds: {options_venv_different}")
+        obs_different = self.reset_env_all(options_venv=options_venv_different)
+
+        print(f"[DEBUG] Testing same seeds: {options_venv_same}")  
+        obs_same = self.reset_env_all(options_venv=options_venv_same)
+
+        # Compare first few elements of state for first two envs
+        if 'state' in obs_different:
+            print(f"[DEBUG] Different seeds - Env 0 state[:3]: {obs_different['state'][0][:3]}")
+            print(f"[DEBUG] Different seeds - Env 1 state[:3]: {obs_different['state'][1][:3]}")
+            print(f"[DEBUG] Same seeds - Env 0 state[:3]: {obs_same['state'][0][:3]}")
+            print(f"[DEBUG] Same seeds - Env 1 state[:3]: {obs_same['state'][1][:3]}")
+        
+        # Test consistency across multiple resets with same seed
+        states_reset1 = self.reset_env_all(options_venv=[{'seed': 42} for _ in range(self.n_envs)])
+        states_reset2 = self.reset_env_all(options_venv=[{'seed': 42} for _ in range(self.n_envs)])
+
+        if 'state' in states_reset1 and 'state' in states_reset2:
+            states_match = np.allclose(states_reset1['state'], states_reset2['state'])
+            print(f"[DEBUG] Consecutive resets with same seed produce identical states: {states_match}")
+
+        # Use the same seeds version for your actual rollout
+        options_venv = options_venv_same
+        obs_venv = obs_same
+
+        states_over_time = []
+        entropies_over_time = []
+        actions_over_time = []
+
+        for step in range(self.argmax_traj_steps):
+            # Record current states
+            # obs_venv["state"] has shape (n_env, H, D)
+            states_over_time.append(obs_venv["state"].copy())
+
+            cond = {
+                "state": torch.from_numpy(obs_venv["state"])
+                .float()
+                .to(self.device)
+            }
+
+            # We want *stochastic* samples in order to search over Q, so deterministic=False
+            samples, diag = self.model(
+                cond=cond,
+                deterministic=False,
+                num_sample=self.argmax_traj_num_sample,
+                use_expectile_exploration=False,
+                use_bc_warmup=False,
+                return_diagnostics=True,
+            )
+
+            # diag["all_q"]: (S, B), diag["all_samples"]: (S, B, H, A)
+            all_q = diag["all_q"]            # [S, n_env]
+            all_samples = diag["all_samples"]  # [S, n_env, H, A]
+
+            # Argmax index per env along the sample dimension
+            argmax_idx = torch.argmax(all_q, dim=0)  # [n_env]
+
+            # Also compute per-env entropy over Q-samples as a diffuseness measure
+            entropies = []
+            for env_idx in range(self.n_envs):
+                q_col = all_q[:, env_idx]
+                probs = torch.softmax(q_col, dim=0)
+                entropy = -(probs * torch.log(probs + 1e-8)).sum().item()
+                entropies.append(entropy)
+            entropies_over_time.append(entropies)
+
+            # Build action tensor where each env takes its argmax-Q sample
+            action_list = []
+            for env_idx in range(self.n_envs):
+                idx = argmax_idx[env_idx]
+                a = all_samples[idx, env_idx, : self.act_steps, :]  # (H, A)
+                action_list.append(a.unsqueeze(0))
+            action_venv = torch.cat(action_list, dim=0).cpu().numpy()  # (n_env, H, A)
+
+            actions_over_time.append(action_venv.copy())
+
+            # Step vector env; we rely on gym's auto-reset-on-done semantics
+            obs_venv, reward_venv, terminated_venv, truncated_venv, info_venv = self.venv.step(
+                action_venv
+            )
+
+        # Stack and save
+        states_arr = np.stack(states_over_time, axis=0)      # [T, n_env, H, D]
+        entropy_arr = np.stack(entropies_over_time, axis=0)  # [T, n_env]
+        actions_arr = np.stack(actions_over_time, axis=0)
+
+        save_path = os.path.join(self.logdir, f"argmax_traj_itr{itr_tag:06d}.npz")
+        # np.savez_compressed(save_path, states=states_arr, q_entropy=entropy_arr)
+        np.savez_compressed(
+            save_path,
+            states=states_arr,
+            q_entropy=entropy_arr,
+            actions=actions_arr,
+        )
+        log.info(f"[ArgmaxTraj] Saved argmax-Q trajectories to {save_path}")
+
+        self.model.train()
+
 
     def run(self):
 
@@ -651,4 +789,12 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                     run_results[-1]["train_episode_reward"] = avg_episode_reward
                 with open(self.result_path, "wb") as f:
                     pickle.dump(run_results, f)
+
+                if self.argmax_traj_enabled:
+                    do_collect = (self.itr == 0)
+                    if self.argmax_traj_freq > 0 and (self.itr % self.argmax_traj_freq == 0):
+                        do_collect = True
+                    if do_collect:
+                        self.rollout_argmax_trajectories(itr_tag=self.itr)
+
             self.itr += 1

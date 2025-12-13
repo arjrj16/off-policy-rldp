@@ -5,30 +5,32 @@ hydra:
     dir: ${logdir}
 _target_: agent.finetune.train_ppo_diffusion_agent.TrainPPODiffusionAgent
 
-name: pusht_ppo_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}
+name: pusht_ppo_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}_tdf${ft_denoising_steps}_numenvs${env.n_envs}
 logdir: ${oc.env:DPPO_LOG_DIR}/pusht-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 # base_policy_path: ${oc.env:DPPO_LOG_DIR}/pusht-pretrain/pusht_pre_diffusion_mlp_ta8_td20/2025-11-29_23-48-49_42/checkpoint/state_200.pt
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/pusht-pretrain/pusht_pre_diffusion_mlp_ta8_td20/2025-11-30_12-46-05_42/checkpoint/state_3000.pt
-normalization_path: ${oc.env:DPPO_DATA_DIR}/pusht/normalization.npz
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/pusht-pretrain/pusht_pre_diffusion_mlp_ta8_td20/2025-11-30_12-46-05_42/checkpoint/state_3000.pt
+# base_policy_path: /home/sarahpan/ddpo/bc_policy.pth
+base_policy_path: dppo/log/pusht-pretrain/pusht_pre_diffusion_mlp_ta16_td100/2025-12-01_15-46-32_42/checkpoint/state_100.pt
+normalization_path: /home/sarahpan/off-policy-rldp/dppo/log/normalization.npz
 
 seed: 42
 device: cuda:0
 env_name: pusht
 obs_dim: 5
 action_dim: 2
-denoising_steps: 20
-ft_denoising_steps: 10
+denoising_steps: 100
+ft_denoising_steps: 5
 cond_steps: 2
-horizon_steps: 8
+horizon_steps: 16
 act_steps: 8
 
 env:
-  n_envs: 20
+  n_envs: 10
   name: ${env_name}
   env_type: pusht
-  max_episode_steps: 300
+  max_episode_steps: 100
   reset_at_iteration: False
-  save_video: True  # Enable video recording during eval
+  save_video: False  # Enable video recording during eval
   best_reward_threshold_for_success: 0.95
   wrappers:
     pusht_lowdim:
@@ -40,9 +42,11 @@ env:
       max_episode_steps: ${env.max_episode_steps}
       reset_within_step: True
 
+# wandb: null
+
 wandb:
   entity: ${oc.env:DPPO_WANDB_ENTITY}
-  project: pusht-finetune
+  project: pusht-dppo
   run: ${now:%H-%M-%S}_${name}
 
 train:

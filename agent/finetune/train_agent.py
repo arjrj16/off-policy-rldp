@@ -148,6 +148,10 @@ class TrainAgent:
             options_venv = [
                 {k: v for k, v in kwargs.items()} for _ in range(self.n_envs)
             ]
+        
+        # DEBUG: Log the options being passed to each environment
+        print(f"[DEBUG] reset_env_all received options: {options_venv}")
+        
         obs_venv = self.venv.reset_arg(options_list=options_venv)
         # convert to OrderedDict if obs_venv is a list of dict
         if isinstance(obs_venv, list):

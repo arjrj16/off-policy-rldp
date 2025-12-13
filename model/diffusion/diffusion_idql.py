@@ -193,8 +193,9 @@ class IDQLDiffusion(RWRDiffusion):
         
         # repeat obs num_sample times along dim 0
         cond_shape_repeat_dims = tuple(1 for _ in cond["state"].shape)
-        B, T, D = cond["state"].shape
+        B_temp, T, D = cond["state"].shape
         S = num_sample
+        
         cond_repeat = cond["state"][None].repeat(num_sample, *cond_shape_repeat_dims)
         cond_repeat = cond_repeat.view(-1, T, D)  # [B*S, T, D]
 
@@ -209,6 +210,7 @@ class IDQLDiffusion(RWRDiffusion):
         # get current Q-function
         current_q1, current_q2 = self.target_q({"state": cond_repeat}, samples)
         q = torch.min(current_q1, current_q2)
+        B = B_temp
         q = q.view(S, B)
 
         # Use argmax

@@ -63,7 +63,6 @@ def get_dataset_download_url(cfg):
         return "https://drive.google.com/drive/u/1/folders/15oF3qiqGzlT_98FDoTIVtGmLtHd5SIbi"
     elif env == "round_table_med_dim":
         return "https://drive.google.com/drive/u/1/folders/1U27xjdRrKlLC8E33o7jMFZ1HF5P_Soik"
-    # unknown
     else:
         raise ValueError(f"Unknown environment {env}")
 

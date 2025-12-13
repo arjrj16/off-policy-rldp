@@ -281,16 +281,27 @@ class PushTEnv(gym.Env):
         self.latest_action = None
         self.reset_to_state = reset_to_state
 
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
+        # Handle seeding
+        if seed is not None:
+            self.seed(seed)
         seed = self._seed
+
         self._setup()
         if self.block_cog is not None:
             self.block.center_of_gravity = self.block_cog
         if self.damping is not None:
             self.space.damping = self.damping
-        # use legacy RandomState for compatiblity
-        state = self.reset_to_state
+
+        # Determine state from options or fallback
+        state = None
+        if options is not None and "state" in options:
+            state = np.array(options["state"], dtype=np.float64)
+        elif self.reset_to_state is not None:
+            state = np.array(self.reset_to_state, dtype=np.float64)
+
         if state is None:
+            # your existing random init
             rs = np.random.RandomState(seed=seed)
             state = np.array(
                 [
@@ -301,6 +312,7 @@ class PushTEnv(gym.Env):
                     rs.randn() * 2 * np.pi - np.pi,
                 ]
             )
+
         self._set_state(state)
         obs = self._get_obs()
         info = self._get_info()
