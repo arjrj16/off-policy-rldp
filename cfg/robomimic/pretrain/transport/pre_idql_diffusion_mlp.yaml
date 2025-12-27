@@ -28,24 +28,28 @@ wandb:
 train:
   n_epochs: 3000
   batch_size: 256
-  # Actor learning rate (BC)
+  save_model_freq: 500
+  log_freq: 1
+  # IDQL specific - same structure as finetune config
+  gamma: 0.99
+  n_critic_warmup_epochs: 100  # train critics before updating actor
+  scale_reward_factor: 1.0
+  critic_tau: 0.005
+  max_grad_norm: null
+  # Actor optimizer
   actor_lr: 1e-4
   actor_weight_decay: 1e-6
-  # Critic learning rate
-  critic_lr: 3e-4
-  critic_weight_decay: 0
-  lr_scheduler:
+  actor_lr_scheduler:
     first_cycle_steps: 3000
     warmup_steps: 100
     min_lr: 1e-5
-    critic_min_lr: 1e-5
-  save_model_freq: 500
-  # IDQL specific
-  gamma: 0.99
-  expectile: 0.7
-  critic_tau: 0.005
-  scale_reward_factor: 1.0
-  critic_updates_per_actor: 1
+  # Critic optimizer
+  critic_lr: 3e-4
+  critic_weight_decay: 0
+  critic_lr_scheduler:
+    first_cycle_steps: 3000
+    warmup_steps: 100
+    min_lr: 1e-5
 
 model:
   _target_: model.diffusion.diffusion_idql.IDQLDiffusion
@@ -60,7 +64,7 @@ model:
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
     horizon_steps: ${horizon_steps}
     action_dim: ${action_dim}
-  # Critic Q (state-action value)
+  # Critic Q (state-action value) - same architecture as finetune
   critic_q:
     _target_: model.common.critic.CriticObsAct
     action_dim: ${action_dim}
@@ -69,7 +73,7 @@ model:
     mlp_dims: [256, 256, 256]
     activation_type: Mish
     residual_style: True
-  # Critic V (state value)
+  # Critic V (state value) - same architecture as finetune
   critic_v:
     _target_: model.common.critic.CriticObs
     cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
