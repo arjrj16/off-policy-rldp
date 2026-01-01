@@ -13,6 +13,14 @@ Usage:
         --input_path /path/to/train.npz \
         --output_path /path/to/train_with_rewards.npz \
         --final_reward 1.0
+
+    python script/dataset/add_sparse_rewards.py \
+        --input_path /home/melwani/67920/code2/off-policy-rldp/data/robomimic/transport/train.npz \
+        --output_path /home/melwani/67920/code2/off-policy-rldp/data/robomimic/transport/train_with_rewards.npz \
+        --final_reward 1.0
+
+
+
 """
 
 import argparse

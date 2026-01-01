@@ -7,7 +7,10 @@ _target_: agent.finetune.train_idql_diffusion_agent.TrainIDQLDiffusionAgent
 
 name: ${env_name}_idql_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport/transport_pre_diffusion_mlp_ta8_td20/2024-07-08_11-18-59/checkpoint/state_8000.pt
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport/transport_pre_diffusion_mlp_ta8_td20/2024-07-08_11-18-59/checkpoint/state_8000.pt
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_idql_diffusion_mlp_ta8_td20/2025-12-27_16-36-45_42/checkpoint/state_1500.pt -- q func pretrained
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_diffusion_mlp_ta8_td20/2025-12-28_10-31-47_42/checkpoint/state_3000.pt
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_diffusion_mlp_ta8_td20/2025-12-28_13-48-45_42/checkpoint/state_3000.pt
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}/normalization.npz
 

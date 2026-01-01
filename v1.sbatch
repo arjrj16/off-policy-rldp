@@ -64,6 +64,14 @@ export MUJOCO_GL=egl
 uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
     --config-dir=cfg/robomimic/finetune/transport 
 
+# offline transport
+# uv run python script/run.py --config-name=pre_idql_diffusion_mlp \
+#     --config-dir=cfg/robomimic/pretrain/transport
+
+# offline transport pretrain !!!!
+# uv run python script/run.py --config-name=pre_idql_diffusion_mlp \
+#     --config-dir=cfg/robomimic/pretrain/transport
+
 # # Option 7: push-t - IDQL
 # uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 #     --config-dir=cfg/pusht/finetune
@@ -75,3 +83,11 @@ uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 # transport pretrain
 # uv run python script/run.py --config-name=pre_diffusion_mlp \
 #     --config-dir=cfg/robomimic/pretrain/transport
+
+
+
+
+# python script/dataset/process_robomimic_dataset.py \
+#     --load_path /orcd/home/002/melwani/67920/code2/robomimic/robomimic/datasets/transport/ph/low_dim_v15.hdf5 \
+#     --save_dir $W/off-policy-rldp/robomimic/transport \
+#     --normalize
