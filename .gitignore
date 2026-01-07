@@ -3,6 +3,8 @@ result/
 wandb/
 .vscode/
 data/
+data_official/
+data_unofficial/
 log/
 logs/
 checkpoints/
