@@ -5,12 +5,12 @@ hydra:
     dir: ${logdir}
 _target_: agent.finetune.train_idql_diffusion_agent.TrainIDQLDiffusionAgent
 
-name: ${env_name}_idql_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
+name: ${env_name}_idql_flow_matching_mlp_ta${horizon_steps}_fs${flow_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport/transport_pre_diffusion_mlp_ta8_td20/2024-07-08_11-18-59/checkpoint/state_8000.pt
-# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_diffusion_mlp_ta8_td20/2026-01-01_00-57-58_42/checkpoint/state_3000.pt
-# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_diffusion_mlp_ta8_td20/2026-01-01_13-50-43_42/checkpoint/state_8000.pt
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_diffusion_mlp_ta8_td20/2026-01-07_04-32-18_42/checkpoint/state_6500.pt
+
+# point this at your flow-matching pretrain checkpoint (EMA is preferred)
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_flow_matching_mlp_ta8_fs20/2026-01-07_11-35-19_42/checkpoint/state_6500.pt
+
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}/normalization.npz
 
@@ -19,10 +19,11 @@ device: cuda:0
 env_name: transport
 obs_dim: 59
 action_dim: 14
-denoising_steps: 20
 cond_steps: 1
 horizon_steps: 8
 act_steps: 8
+
+flow_steps: 20
 
 env:
   n_envs: 50
@@ -39,7 +40,7 @@ env:
                     "robot1_eef_pos",
                     "robot1_eef_quat",
                     "robot1_gripper_qpos",
-                    'object'] # same order of preprocessed observations
+                    'object']
     multi_step:
       n_obs_steps: ${cond_steps}
       n_action_steps: ${act_steps}
@@ -76,24 +77,26 @@ train:
   # IDQL specific
   scale_reward_factor: 1
   eval_deterministic: True
-  eval_sample_num: 10 # how many samples to score during eval
-  critic_tau: 0.001  # rate of target q network update
+  eval_sample_num: 10
+  critic_tau: 0.001
   use_expectile_exploration: True
-  buffer_size: 5000 # * n_envs
+  buffer_size: 5000
   replay_ratio: 128
   batch_size: 1000
   use_bc_warmup: True
   bc_warmup_iters: 30
-  mask_truncated: True  # true = mask bootstrap r of trajs that are truncated and terminated, false = mask only terminated trajs
+  mask_truncated: True
   diagnostic:
     enabled: true
     env_idx: 0
     bc_num_samples: 8
 
 model:
-  _target_: model.diffusion.diffusion_idql.IDQLDiffusion
-  # Sampling HPs
-  min_sampling_denoising_std: 0.1
+  _target_: model.flow_matching.flow_idql.IDQLFlowMatching
+  # sampling HPs
+  flow_steps: ${flow_steps}
+  sampler: euler
+  init_noise_scale: 1.0
   randn_clip_value: 3
   mask_truncated: ${train.mask_truncated}
   network_path: ${base_policy_path}
@@ -122,5 +125,5 @@ model:
   horizon_steps: ${horizon_steps}
   obs_dim: ${obs_dim}
   action_dim: ${action_dim}
-  denoising_steps: ${denoising_steps}
   device: ${device}
+
