@@ -23,7 +23,7 @@ cond_steps: 1
 horizon_steps: 8
 act_steps: 8
 
-flow_steps: 20
+flow_steps: 50
 
 env:
   n_envs: 50
@@ -71,6 +71,8 @@ train:
     min_lr: 1e-3
   save_model_freq: 100
   val_freq: 10
+  # Flow-matching actor loss can produce larger gradients once it starts self-training on rollouts.
+  max_grad_norm: 1.0
   render:
     freq: 1
     num: 0
@@ -95,9 +97,14 @@ model:
   _target_: model.flow_matching.flow_idql.IDQLFlowMatching
   # sampling HPs
   flow_steps: ${flow_steps}
-  sampler: euler
+  sampler: heun
+  time_scale: 1000.0
   init_noise_scale: 1.0
   randn_clip_value: 3
+  # Robomimic wrapper expects normalized actions (typically in [-1, 1]).
+  # Clamping reduces OOD drift that causes critic extrapolation + Q-filter collapse.
+  step_action_clip_value: 1.0
+  final_action_clip_value: 1.0
   mask_truncated: ${train.mask_truncated}
   network_path: ${base_policy_path}
   actor:

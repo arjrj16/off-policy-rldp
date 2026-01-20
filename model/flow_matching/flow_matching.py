@@ -34,8 +34,14 @@ class FlowMatchingModel(nn.Module):
         # Sampling (ODE integration)
         flow_steps: int = 20,
         sampler: str = "euler",  # "euler" | "heun"
+        # Scale continuous time t in [0,1] to a larger range before sinusoidal embedding.
+        # Diffusion passes integer timesteps (e.g., 0..19, 0..999); without scaling,
+        # embeddings can be near-constant and hurt sampling quality.
+        time_scale: float = 1000.0,
         init_noise_scale: float = 1.0,
         randn_clip_value: float = 10.0,
+        # Optional safety: clamp trajectory during integration (helps prevent OOD drift).
+        step_action_clip_value: Optional[float] = None,
         final_action_clip_value: Optional[float] = None,
         **kwargs,
     ):
@@ -48,7 +54,10 @@ class FlowMatchingModel(nn.Module):
         self.network = network.to(device)
         if network_path is not None:
             # Match DiffusionModel semantics: if checkpoint has "ema", load that.
-            checkpoint = torch.load(network_path, map_location=device)
+            try:
+                checkpoint = torch.load(network_path, map_location=device, weights_only=True)
+            except TypeError:
+                checkpoint = torch.load(network_path, map_location=device)
             if isinstance(checkpoint, dict) and ("ema" in checkpoint):
                 self.load_state_dict(checkpoint["ema"], strict=False)
                 log.info("Loaded SL-trained policy from %s", network_path)
@@ -66,8 +75,10 @@ class FlowMatchingModel(nn.Module):
         self.sampler = str(sampler).lower()
         assert self.sampler in {"euler", "heun"}, f"Unknown sampler: {sampler}"
 
+        self.time_scale = float(time_scale)
         self.init_noise_scale = float(init_noise_scale)
         self.randn_clip_value = float(randn_clip_value)
+        self.step_action_clip_value = step_action_clip_value
         self.final_action_clip_value = final_action_clip_value
 
     def _make_t(self, batch_size: int, t: Union[float, torch.Tensor], device: torch.device):
@@ -92,14 +103,15 @@ class FlowMatchingModel(nn.Module):
         Returns:
             actions: (B, horizon_steps, action_dim)
         """
-        # NOTE: "deterministic" currently matches repo semantics: no extra noise is
-        # injected during integration, but diversity still comes from x0 ~ N(0, I).
-        _ = deterministic
-
         device = torch.device(self.device)
         B = len(cond["state"])
-        x = torch.randn((B, self.horizon_steps, self.action_dim), device=device) * self.init_noise_scale
-        x = x.clamp(-self.randn_clip_value, self.randn_clip_value)
+        # In this repo, eval uses `eval_deterministic=True` to eliminate sampling noise.
+        # For flow-matching, we interpret that as using a fixed initial condition.
+        if deterministic:
+            x = torch.zeros((B, self.horizon_steps, self.action_dim), device=device)
+        else:
+            x = torch.randn((B, self.horizon_steps, self.action_dim), device=device) * self.init_noise_scale
+            x = x.clamp(-self.randn_clip_value, self.randn_clip_value)
 
         dt = 1.0 / float(self.flow_steps)
         net = network_override if network_override is not None else self.network
@@ -107,14 +119,16 @@ class FlowMatchingModel(nn.Module):
         for i in range(self.flow_steps):
             t = float(i) * dt
             t_b = self._make_t(B, t, device)
-            v = net(x, t_b, cond=cond)
+            v = net(x, t_b * self.time_scale, cond=cond)
             if self.sampler == "euler":
                 x = x + dt * v
             else:  # heun (RK2)
                 x_euler = x + dt * v
                 t_b_next = self._make_t(B, t + dt, device)
-                v_next = net(x_euler, t_b_next, cond=cond)
+                v_next = net(x_euler, t_b_next * self.time_scale, cond=cond)
                 x = x + 0.5 * dt * (v + v_next)
+            if self.step_action_clip_value is not None:
+                x = torch.clamp(x, -self.step_action_clip_value, self.step_action_clip_value)
 
         if self.final_action_clip_value is not None:
             x = torch.clamp(x, -self.final_action_clip_value, self.final_action_clip_value)
@@ -141,6 +155,6 @@ class FlowMatchingModel(nn.Module):
 
         x_t = (1.0 - t_view) * x0 + t_view * x1
         v_target = x1 - x0
-        v_pred = self.network(x_t, t, cond=cond)
+        v_pred = self.network(x_t, t * self.time_scale, cond=cond)
         return torch.mean((v_pred - v_target) ** 2)
 
