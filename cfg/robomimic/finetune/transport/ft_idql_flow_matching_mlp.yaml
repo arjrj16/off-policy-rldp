@@ -9,8 +9,8 @@ name: ${env_name}_idql_flow_matching_mlp_ta${horizon_steps}_fs${flow_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/robomimic-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
 
 # point this at your flow-matching pretrain checkpoint (EMA is preferred)
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_flow_matching_mlp_ta8_fs20/2026-01-07_11-35-19_42/checkpoint/state_6500.pt
-
+# base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_flow_matching_mlp_ta8_fs20/2026-01-07_11-35-19_42/checkpoint/state_6500.pt
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/robomimic-pretrain/transport_pre_flow_matching_mlp_ta8_fs50/2026-01-20_14-53-45_42/checkpoint/state_6000.pt
 robomimic_env_cfg_path: cfg/robomimic/env_meta/${env_name}.json
 normalization_path: ${oc.env:DPPO_DATA_DIR}/robomimic/${env_name}/normalization.npz
 
@@ -99,6 +99,9 @@ model:
   flow_steps: ${flow_steps}
   sampler: heun
   time_scale: 1000.0
+  # Even in "deterministic" eval, add a tiny x0 noise so IDQL can still Q-filter
+  # among diverse candidates (diffusion deterministic eval still has mild stochasticity).
+  deterministic_noise_scale: 0.1
   init_noise_scale: 1.0
   randn_clip_value: 3
   # Robomimic wrapper expects normalized actions (typically in [-1, 1]).

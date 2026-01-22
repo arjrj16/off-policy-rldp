@@ -74,12 +74,12 @@ export MUJOCO_GL=egl
 
 # Robomimic transport (flow matching)
 # Pretrain:
-uv run python script/run.py --config-name=pre_flow_matching_mlp \
-    --config-dir=cfg/robomimic/pretrain/transport
+# uv run python script/run.py --config-name=pre_flow_matching_mlp \
+#     --config-dir=cfg/robomimic/pretrain/transport
 #
 # Finetune (IDQL):
-# uv run python script/run.py --config-name=ft_idql_flow_matching_mlp \
-#     --config-dir=cfg/robomimic/finetune/transport
+uv run python script/run.py --config-name=ft_idql_flow_matching_mlp \
+    --config-dir=cfg/robomimic/finetune/transport
 
 # transport pretrain (diffusion baseline)
 # uv run python script/run.py --config-name=pre_diffusion_mlp \

@@ -38,6 +38,11 @@ class FlowMatchingModel(nn.Module):
         # Diffusion passes integer timesteps (e.g., 0..19, 0..999); without scaling,
         # embeddings can be near-constant and hurt sampling quality.
         time_scale: float = 1000.0,
+        # Deterministic sampling semantics: diffusion "deterministic" still has small
+        # stochasticity; for flow matching the only stochasticity is x0. We interpret
+        # deterministic=True as sampling with a *lower* x0 noise scale (default 0.0),
+        # which makes behavior closer to a "mode"/mean action while remaining stable.
+        deterministic_noise_scale: float = 0.0,
         init_noise_scale: float = 1.0,
         randn_clip_value: float = 10.0,
         # Optional safety: clamp trajectory during integration (helps prevent OOD drift).
@@ -76,6 +81,7 @@ class FlowMatchingModel(nn.Module):
         assert self.sampler in {"euler", "heun"}, f"Unknown sampler: {sampler}"
 
         self.time_scale = float(time_scale)
+        self.deterministic_noise_scale = float(deterministic_noise_scale)
         self.init_noise_scale = float(init_noise_scale)
         self.randn_clip_value = float(randn_clip_value)
         self.step_action_clip_value = step_action_clip_value
@@ -106,9 +112,14 @@ class FlowMatchingModel(nn.Module):
         device = torch.device(self.device)
         B = len(cond["state"])
         # In this repo, eval uses `eval_deterministic=True` to eliminate sampling noise.
-        # For flow-matching, we interpret that as using a fixed initial condition.
+        # For flow-matching, we interpret that as using a lower-noise initial condition.
         if deterministic:
-            x = torch.zeros((B, self.horizon_steps, self.action_dim), device=device)
+            scale = float(self.deterministic_noise_scale)
+            if scale == 0.0:
+                x = torch.zeros((B, self.horizon_steps, self.action_dim), device=device)
+            else:
+                x = torch.randn((B, self.horizon_steps, self.action_dim), device=device) * scale
+                x = x.clamp(-self.randn_clip_value, self.randn_clip_value)
         else:
             x = torch.randn((B, self.horizon_steps, self.action_dim), device=device) * self.init_noise_scale
             x = x.clamp(-self.randn_clip_value, self.randn_clip_value)
