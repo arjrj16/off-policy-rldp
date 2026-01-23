@@ -58,11 +58,9 @@ class EvalAgent:
         self.max_episode_steps = cfg.env.max_episode_steps
         self.reset_at_iteration = cfg.env.get("reset_at_iteration", True)
         self.save_full_observations = cfg.env.get("save_full_observations", False)
-        self.furniture_sparse_reward = (
-            cfg.env.specific.get("sparse_reward", False)
-            if "specific" in cfg.env
-            else False
-        )  # furniture specific, for best reward calculation
+        self.sparse_reward = cfg.env.get("sparse_reward", False)
+        if not self.sparse_reward and "specific" in cfg.env:
+            self.sparse_reward = cfg.env.specific.get("sparse_reward", False)
 
         # Build model and load checkpoint
         self.model = hydra.utils.instantiate(cfg.model)

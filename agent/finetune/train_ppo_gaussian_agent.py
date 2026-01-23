@@ -137,9 +137,7 @@ class TrainPPOGaussianAgent(TrainPPOAgent):
                 episode_reward = np.array(
                     [np.sum(reward_traj) for reward_traj in reward_trajs_split]
                 )
-                if (
-                    self.furniture_sparse_reward
-                ):  # only for furniture tasks, where reward only occurs in one env step
+                if self.sparse_reward:  # sparse terminal-only reward
                     episode_best_reward = episode_reward
                 else:
                     episode_best_reward = np.array(

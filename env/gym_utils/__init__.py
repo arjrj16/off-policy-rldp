@@ -69,6 +69,17 @@ def make_async(
           dtype=float32)
     """
 
+    if env_type == "mjx_dmc":
+        from env.mjx import MJXCheetahRunVecEnv
+
+        return MJXCheetahRunVecEnv(
+            n_envs=num_envs,
+            obs_steps=obs_steps,
+            max_episode_steps=max_episode_steps,
+            reward_threshold=kwargs.get("reward_threshold", 5.0),
+            seed=kwargs.get("seed", 0),
+        )
+
     if env_type == "furniture":
         from furniture_bench.envs.observation import DEFAULT_STATE_OBS
         from furniture_bench.envs.furniture_rl_sim_env import FurnitureRLSimEnv

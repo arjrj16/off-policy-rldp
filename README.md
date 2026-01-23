@@ -31,11 +31,13 @@ conda activate dppo
 pip install -e .
 ```
 
-3. Install specific environment dependencies (Gym / Kitchen / Robomimic / D3IL / Furniture-Bench) or all dependencies (except for Kitchen, which has dependency conflicts with other tasks).
+3. Install specific environment dependencies (Gym / Kitchen / Robomimic / D3IL / Furniture-Bench / MJX) or all dependencies (except for Kitchen, which has dependency conflicts with other tasks).
 ```console
-pip install -e .[gym] # or [kitchen], [robomimic], [d3il], [furniture]
+pip install -e .[gym] # or [kitchen], [robomimic], [d3il], [furniture], [mjx]
 pip install -e .[all] # except for Kitchen
 ```
+
+**MJX note:** install GPU-enabled JAX (and CUDA) following https://github.com/google/jax#installation.
 
 4. [Install MuJoCo for Gym and/or Robomimic](installation/install_mujoco.md). [Install D3IL](installation/install_d3il.md). [Install IsaacGym and Furniture-Bench](installation/install_furniture.md)
 
@@ -123,7 +125,7 @@ python script/run.py --config-name=ft_ppo_diffusion_mlp \
     --config-dir=cfg/furniture/finetune/one_leg_low
 ```
 
-**Note**: In Gym, Robomimic, and D3IL tasks, we run 40, 50, and 50 parallelized MuJoCo environments on CPU, respectively. If you would like to use fewer environments (given limited CPU threads, or GPU memory for rendering), you can reduce `env.n_envs` and increase `train.n_steps`, so the total number of environment steps collected in each iteration (n_envs x n_steps x act_steps) remains roughly the same. Try to set `train.n_steps` a multiple of `env.max_episode_steps / act_steps`, and be aware that we only count episodes finished within an iteration for eval. Furniture-Bench tasks run IsaacGym on a single GPU.
+**Note**: In Gym, Robomimic, and D3IL tasks, we run 40, 50, and 50 parallelized MuJoCo environments on CPU, respectively. If you would like to use fewer environments (given limited CPU threads, or GPU memory for rendering), you can reduce `env.n_envs` and increase `train.n_steps`, so the total number of environment steps collected in each iteration (n_envs x n_steps x act_steps) remains roughly the same. Try to set `train.n_steps` a multiple of `env.max_episode_steps / act_steps`, and be aware that we only count episodes finished within an iteration for eval. Furniture-Bench tasks run IsaacGym on a single GPU. MJX tasks run batched simulation on GPU; tune `env.n_envs` for throughput.
 
 To fine-tune your own pre-trained policy instead, override `base_policy_path` to your own checkpoint, which is saved under `checkpoint/` of the pre-training directory. You can set `base_policy_path=<path>` in the command line when launching fine-tuning.
 

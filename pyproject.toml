@@ -64,6 +64,12 @@ furniture = [
     "ipdb==0.13.13",
     "patchelf",
 ]
+mjx = [
+    "dm_control",
+    "jax",
+    "jaxlib",
+    "mujoco",
+]
 exact = [   # exact likelihood
     "torchdiffeq",
 ]
