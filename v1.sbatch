@@ -23,13 +23,19 @@ export DPPO_WANDB_ENTITY=arjunmelwani-massachusetts-institute-of-technology     
 # Suppress d4rl import warnings
 export D4RL_SUPPRESS_IMPORT_ERROR=1
 
-# set up conda env for mujoco to work:
-module load miniforge/24.3.0-0
-conda activate mjgl
+# # set up conda env for mujoco to work:
+# module load miniforge/24.3.0-0
+# conda activate mjgl
 
-export CPATH="$CONDA_PREFIX/include:${CPATH:-}"
-export LIBRARY_PATH="$CONDA_PREFIX/lib:${LIBRARY_PATH:-}"
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+# export CPATH="$CONDA_PREFIX/include:${CPATH:-}"
+# export LIBRARY_PATH="$CONDA_PREFIX/lib:${LIBRARY_PATH:-}"
+# export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+
+# use UV 3.10 venv
+source /home/melwani/67920/code2/off-policy-rldp/.venv310/bin/activate
+
+# optional but recommended for JAX
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 # Headless rendering:
 export MUJOCO_GL=egl
@@ -61,8 +67,8 @@ export MUJOCO_GL=egl
 #     --config-dir=cfg/gym/scratch/hopper-v2
 
 # # Option 6: Robomimic - transport
-uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
-    --config-dir=cfg/robomimic/finetune/transport 
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+#     --config-dir=cfg/robomimic/finetune/transport 
 
 # # Option 7: push-t - IDQL
 # uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
@@ -75,3 +81,7 @@ uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 # transport pretrain
 # uv run python script/run.py --config-name=pre_diffusion_mlp \
 #     --config-dir=cfg/robomimic/pretrain/transport
+
+# Option 9: MJX - Cheetah Run
+python script/run.py --config-name=ft_ppo_diffusion_mlp_bench \
+    --config-dir=cfg/mjx/finetune/cheetah-run wandb=null

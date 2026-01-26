@@ -12,16 +12,13 @@ from gym import spaces
 import jax
 import jax.numpy as jnp
 import mujoco
-from mujoco import mjx
+import mujoco.mjx as mjx
 
-from dm_control.suite import cheetah, common
-from dm_control.utils import io as dm_io
+from dm_control.suite import cheetah
 
 
 def _load_cheetah_model() -> mjx.Model:
-    xml_string = dm_io.GetResource(cheetah._MODEL_XML_PATH)
-    assets = common.ASSETS.copy()
-    assets.update(cheetah._ASSETS)
+    xml_string, assets = cheetah.get_model_and_assets()
     model = mujoco.MjModel.from_xml_string(xml_string, assets=assets)
     return mjx.put_model(model)
 
@@ -39,6 +36,7 @@ def _mask_tree(new, old, done: jnp.ndarray):
     return jax.tree_util.tree_map(_mask_array, new, old)
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass
 class MJXEnvState:
     data: mjx.Data
@@ -47,6 +45,21 @@ class MJXEnvState:
     success: jnp.ndarray
     done: jnp.ndarray
     rng: jnp.ndarray
+
+    def tree_flatten(self):
+        children = (
+            self.data,
+            self.obs_hist,
+            self.step_count,
+            self.success,
+            self.done,
+            self.rng,
+        )
+        return children, None
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
 
 
 class MJXCheetahRunVecEnv:
@@ -139,7 +152,10 @@ class MJXCheetahRunVecEnv:
             def body(carry, act):
                 data, step_count, success, done, obs_hist = carry
                 done_prev = done
-                data_next = mjx.step(model, data.replace(ctrl=act))
+                def step_single(d, a):
+                    return mjx.step(model, d.replace(ctrl=a))
+
+                data_next = jax.vmap(step_single)(data, act)
                 vel = data_next.qvel[:, 0]
                 success_next = success | (vel >= reward_threshold)
                 step_count_next = step_count + 1
@@ -193,7 +209,9 @@ class MJXCheetahRunVecEnv:
     def seed(self, seed: Optional[int] = None):
         if seed is None:
             seed = 0
-        self._rng = jax.random.PRNGKey(seed)
+        if isinstance(seed, (list, tuple, np.ndarray)):
+            seed = int(seed[0])
+        self._rng = jax.random.PRNGKey(int(seed))
 
     def reset(self, **kwargs) -> Dict[str, np.ndarray]:
         self.state, obs_hist = self._reset_fn(self._rng)

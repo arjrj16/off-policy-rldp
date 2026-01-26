@@ -40,6 +40,7 @@ train:
   n_train_itr: 1000
   n_critic_warmup_itr: 0
   n_steps: ${eval:'round(${env.max_episode_steps} / ${act_steps})'}
+  logprob_batch_size: 10240
   gamma: 0.99
   actor_lr: 1e-4
   actor_weight_decay: 0
