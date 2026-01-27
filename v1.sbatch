@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J idql-train                  # job name
+#SBATCH -J mjx-dppo                    # job name
 #SBATCH -p mit_normal_gpu              # partition
 #SBATCH --gres=gpu:l40:1               # 1x L40 GPU
 #SBATCH -N 1                           # 1 node
@@ -15,6 +15,7 @@ source ~/.bashrc
 
 # Go to DPPO project directory
 cd $W/off-policy-rldp
+git checkout mjx-cheetah
 
 # Set required environment variables
 export DPPO_DATA_DIR=$W/off-policy-rldp/data      # where datasets/normalization are stored
@@ -82,6 +83,6 @@ export MUJOCO_GL=egl
 # uv run python script/run.py --config-name=pre_diffusion_mlp \
 #     --config-dir=cfg/robomimic/pretrain/transport
 
-# Option 9: MJX - Cheetah Run
-python script/run.py --config-name=ft_ppo_diffusion_mlp_bench \
-    --config-dir=cfg/mjx/finetune/cheetah-run wandb=null
+# Option 9: MJX - Cheetah Run (DPPO)
+python script/run.py --config-name=ft_ppo_diffusion_mlp \
+    --config-dir=cfg/mjx/finetune/cheetah-run
