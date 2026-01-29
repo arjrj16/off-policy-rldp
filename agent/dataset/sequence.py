@@ -158,6 +158,7 @@ class StitchedSequenceQLearningDataset(StitchedSequenceDataset):
         discount_factor=1.0,
         device="cuda:0",
         get_mc_return=False,
+        reward_mode="start",
         **kwargs,
     ):
         if dataset_path.endswith(".npz"):
@@ -182,6 +183,10 @@ class StitchedSequenceQLearningDataset(StitchedSequenceDataset):
             torch.from_numpy(dataset["terminals"][:total_num_steps]).to(device).float()
         )
         log.info(f"Dones shape/type: {self.dones.shape, self.dones.dtype}")
+        if reward_mode not in ("start", "end"):
+            raise ValueError(f"Unsupported reward_mode: {reward_mode}")
+        self.reward_mode = reward_mode
+        log.info(f"Reward mode: {self.reward_mode}")
 
         super().__init__(
             dataset_path=dataset_path,
@@ -236,8 +241,12 @@ class StitchedSequenceQLearningDataset(StitchedSequenceDataset):
         end = start + self.horizon_steps
         states = self.states[(start - num_before_start) : (start + 1)]
         actions = self.actions[start:end]
-        rewards = self.rewards[start : (start + 1)]
-        dones = self.dones[start : (start + 1)]
+        if self.reward_mode == "end":
+            rewards = self.rewards[end - 1 : end]
+            dones = self.dones[end - 1 : end]
+        else:
+            rewards = self.rewards[start : (start + 1)]
+            dones = self.dones[start : (start + 1)]
 
         # Account for action horizon
         if idx < len(self.indices) - self.horizon_steps:
