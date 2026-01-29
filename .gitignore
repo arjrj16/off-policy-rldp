@@ -147,3 +147,4 @@ cfg/robomimic/*.sh
 *.out
 data_official/
 data_unofficial/
+compare_out/

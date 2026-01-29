@@ -103,6 +103,13 @@ class TrainIDQLCriticPretrainAgent:
         for _ in range(self.n_epochs):
             loss_q_epoch = []
             loss_v_epoch = []
+            reward_present_epoch = False
+            reward_batch_count = 0
+            total_batch_count = 0
+            reward_step_count = 0
+            total_step_count = 0
+            loss_q_reward_batches = []
+            loss_q_nonreward_batches = []
 
             for batch in self.dataloader_train:
                 if self.dataset_train.device == "cpu":
@@ -113,6 +120,13 @@ class TrainIDQLCriticPretrainAgent:
                     actions, conditions, rewards, dones, _ = batch
                 else:
                     actions, conditions, rewards, dones = batch
+
+                reward_present_epoch = reward_present_epoch or (rewards > 0).any()
+                batch_has_reward = (rewards > 0).any().item()
+                reward_batch_count += int(batch_has_reward)
+                total_batch_count += 1
+                reward_step_count += int((rewards > 0).sum().item())
+                total_step_count += int(rewards.numel())
 
                 obs = {"state": conditions["state"]}
                 next_obs = {"state": conditions["next_state"]}
@@ -141,6 +155,10 @@ class TrainIDQLCriticPretrainAgent:
 
                 loss_q_epoch.append(loss_q.item())
                 loss_v_epoch.append(loss_v.item())
+                if batch_has_reward:
+                    loss_q_reward_batches.append(loss_q.item())
+                else:
+                    loss_q_nonreward_batches.append(loss_q.item())
 
             # Update lr
             self.critic_q_lr_scheduler.step()
@@ -158,10 +176,33 @@ class TrainIDQLCriticPretrainAgent:
                     f"{self.epoch}: critic_q {avg_loss_q:8.4f} | critic_v {avg_loss_v:8.4f}"
                 )
                 if self.use_wandb:
+                    reward_batch_fraction = (
+                        reward_batch_count / total_batch_count
+                        if total_batch_count > 0
+                        else 0.0
+                    )
+                    reward_step_fraction = (
+                        reward_step_count / total_step_count if total_step_count > 0 else 0.0
+                    )
+                    loss_q_reward = (
+                        float(np.mean(loss_q_reward_batches))
+                        if loss_q_reward_batches
+                        else 0.0
+                    )
+                    loss_q_nonreward = (
+                        float(np.mean(loss_q_nonreward_batches))
+                        if loss_q_nonreward_batches
+                        else 0.0
+                    )
                     wandb.log(
                         {
                             "loss - critic_q": avg_loss_q,
                             "loss - critic_v": avg_loss_v,
+                            "reward_present": float(reward_present_epoch),
+                            "reward_batch_fraction": reward_batch_fraction,
+                            "reward_step_fraction": reward_step_fraction,
+                            "loss_q_reward_batches": loss_q_reward,
+                            "loss_q_nonreward_batches": loss_q_nonreward,
                         },
                         step=self.epoch,
                         commit=True,

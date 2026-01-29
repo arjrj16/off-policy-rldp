@@ -29,13 +29,26 @@ class IDQLDiffusion(RWRDiffusion):
         critic_v,
         **kwargs,
     ):
-        super().__init__(network=actor, **kwargs)
+        network_path = kwargs.pop("network_path", None)
+        super().__init__(network=actor, network_path=None, **kwargs)
         self.critic_q = critic_q.to(self.device)
         self.target_q = copy.deepcopy(critic_q)
         self.critic_v = critic_v.to(self.device)
 
         # assign actor
         self.actor = self.network
+        if network_path is not None:
+            checkpoint = torch.load(
+                network_path, map_location=self.device, weights_only=True
+            )
+            state_dict_key = "ema" if "ema" in checkpoint else "model"
+            self.load_state_dict(checkpoint[state_dict_key], strict=False)
+            log.info(
+                "Loaded full state dict from %s using key '%s'",
+                network_path,
+                state_dict_key,
+            )
+            self.target_q.load_state_dict(self.critic_q.state_dict())
 
     # ---------- RL training ----------#
 
