@@ -61,8 +61,8 @@ export MUJOCO_GL=egl
 #     --config-dir=cfg/gym/scratch/hopper-v2
 
 # # Option 6: Robomimic - transport
-uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
-    --config-dir=cfg/robomimic/finetune/transport 
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+#     --config-dir=cfg/robomimic/finetune/transport 
 
 # # Option 7: push-t - IDQL
 # uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
@@ -78,5 +78,5 @@ uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 
 
 # transport idql critic pretrain
-# uv run python script/run.py --config-name=pre_idql_critic_mlp \
-#     --config-dir=cfg/robomimic/pretrain/transport 
+uv run python script/run.py --config-name=pre_idql_critic_mlp \
+    --config-dir=cfg/robomimic/pretrain/transport 

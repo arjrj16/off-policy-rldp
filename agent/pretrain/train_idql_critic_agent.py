@@ -11,6 +11,7 @@ import torch
 import hydra
 import wandb
 from omegaconf import OmegaConf
+from copy import deepcopy
 
 from util.scheduler import CosineAnnealingWarmupRestarts
 from agent.pretrain.train_agent import batch_to_device
@@ -66,6 +67,40 @@ class TrainIDQLCriticPretrainAgent:
             shuffle=True,
             pin_memory=True if self.dataset_train.device == "cpu" else False,
         )
+        self.dataloader_val = None
+        val_split = cfg.train.get("val_split", 0.0)
+        if val_split and val_split > 0:
+            # Episode-level holdout split (no leakage across train/val).
+            # Group tuple indices by their episode start (start - num_before_start).
+            episode_to_indices = {}
+            for start, num_before_start in self.dataset_train.indices:
+                ep_start = start - num_before_start
+                episode_to_indices.setdefault(ep_start, []).append((start, num_before_start))
+
+            episode_starts = list(episode_to_indices.keys())
+            n_val_eps = int(len(episode_starts) * val_split)
+            n_val_eps = max(1, n_val_eps) if len(episode_starts) > 1 else 0
+            rng = random.Random(self.seed)
+            val_eps = set(rng.sample(episode_starts, n_val_eps)) if n_val_eps > 0 else set()
+
+            train_indices = []
+            val_indices = []
+            for ep_start, idx_list in episode_to_indices.items():
+                if ep_start in val_eps:
+                    val_indices.extend(idx_list)
+                else:
+                    train_indices.extend(idx_list)
+
+            self.dataset_train.set_indices(train_indices)
+            self.dataset_val = deepcopy(self.dataset_train)
+            self.dataset_val.set_indices(val_indices)
+            self.dataloader_val = torch.utils.data.DataLoader(
+                self.dataset_val,
+                batch_size=self.batch_size,
+                num_workers=4 if self.dataset_val.device == "cpu" else 0,
+                shuffle=False,
+                pin_memory=True if self.dataset_val.device == "cpu" else False,
+            )
 
         # Optimizers
         self.critic_q_optimizer = torch.optim.AdamW(
@@ -103,13 +138,6 @@ class TrainIDQLCriticPretrainAgent:
         for _ in range(self.n_epochs):
             loss_q_epoch = []
             loss_v_epoch = []
-            reward_present_epoch = False
-            reward_batch_count = 0
-            total_batch_count = 0
-            reward_step_count = 0
-            total_step_count = 0
-            loss_q_reward_batches = []
-            loss_q_nonreward_batches = []
 
             for batch in self.dataloader_train:
                 if self.dataset_train.device == "cpu":
@@ -120,13 +148,6 @@ class TrainIDQLCriticPretrainAgent:
                     actions, conditions, rewards, dones, _ = batch
                 else:
                     actions, conditions, rewards, dones = batch
-
-                reward_present_epoch = reward_present_epoch or (rewards > 0).any()
-                batch_has_reward = (rewards > 0).any().item()
-                reward_batch_count += int(batch_has_reward)
-                total_batch_count += 1
-                reward_step_count += int((rewards > 0).sum().item())
-                total_step_count += int(rewards.numel())
 
                 obs = {"state": conditions["state"]}
                 next_obs = {"state": conditions["next_state"]}
@@ -155,14 +176,46 @@ class TrainIDQLCriticPretrainAgent:
 
                 loss_q_epoch.append(loss_q.item())
                 loss_v_epoch.append(loss_v.item())
-                if batch_has_reward:
-                    loss_q_reward_batches.append(loss_q.item())
-                else:
-                    loss_q_nonreward_batches.append(loss_q.item())
 
             # Update lr
             self.critic_q_lr_scheduler.step()
             self.critic_v_lr_scheduler.step()
+
+            # Validation
+            loss_q_val = None
+            loss_v_val = None
+            if self.dataloader_val is not None:
+                self.model.eval()
+                loss_q_val_epoch = []
+                loss_v_val_epoch = []
+                with torch.no_grad():
+                    for batch in self.dataloader_val:
+                        if self.dataset_val.device == "cpu":
+                            batch = batch_to_device(batch, self.device)
+                        if len(batch) == 5:
+                            actions, conditions, rewards, dones, _ = batch
+                        else:
+                            actions, conditions, rewards, dones = batch
+                        obs = {"state": conditions["state"]}
+                        next_obs = {"state": conditions["next_state"]}
+                        loss_v = self.model.loss_critic_v(obs, actions)
+                        loss_q = self.model.loss_critic_q(
+                            obs,
+                            next_obs,
+                            actions,
+                            rewards,
+                            dones,
+                            self.gamma,
+                        )
+                        loss_q_val_epoch.append(loss_q.item())
+                        loss_v_val_epoch.append(loss_v.item())
+                loss_q_val = (
+                    float(np.mean(loss_q_val_epoch)) if loss_q_val_epoch else 0.0
+                )
+                loss_v_val = (
+                    float(np.mean(loss_v_val_epoch)) if loss_v_val_epoch else 0.0
+                )
+                self.model.train()
 
             # Save model
             if self.epoch % self.save_model_freq == 0 or self.epoch == self.n_epochs:
@@ -176,37 +229,18 @@ class TrainIDQLCriticPretrainAgent:
                     f"{self.epoch}: critic_q {avg_loss_q:8.4f} | critic_v {avg_loss_v:8.4f}"
                 )
                 if self.use_wandb:
-                    reward_batch_fraction = (
-                        reward_batch_count / total_batch_count
-                        if total_batch_count > 0
-                        else 0.0
-                    )
-                    reward_step_fraction = (
-                        reward_step_count / total_step_count if total_step_count > 0 else 0.0
-                    )
-                    loss_q_reward = (
-                        float(np.mean(loss_q_reward_batches))
-                        if loss_q_reward_batches
-                        else 0.0
-                    )
-                    loss_q_nonreward = (
-                        float(np.mean(loss_q_nonreward_batches))
-                        if loss_q_nonreward_batches
-                        else 0.0
-                    )
-                    wandb.log(
-                        {
-                            "loss - critic_q": avg_loss_q,
-                            "loss - critic_v": avg_loss_v,
-                            "reward_present": float(reward_present_epoch),
-                            "reward_batch_fraction": reward_batch_fraction,
-                            "reward_step_fraction": reward_step_fraction,
-                            "loss_q_reward_batches": loss_q_reward,
-                            "loss_q_nonreward_batches": loss_q_nonreward,
-                        },
-                        step=self.epoch,
-                        commit=True,
-                    )
+                    log_payload = {
+                        "loss - critic_q": avg_loss_q,
+                        "loss - critic_v": avg_loss_v,
+                    }
+                    if loss_q_val is not None and loss_v_val is not None:
+                        log_payload.update(
+                            {
+                                "loss - critic_q_val": loss_q_val,
+                                "loss - critic_v_val": loss_v_val,
+                            }
+                        )
+                    wandb.log(log_payload, step=self.epoch, commit=True)
 
             self.epoch += 1
 
