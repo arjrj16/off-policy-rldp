@@ -13,6 +13,7 @@ import torch.nn.functional as F
 log = logging.getLogger(__name__)
 
 from model.diffusion.diffusion_rwr import RWRDiffusion
+from model.diffusion.diffusion import DiffusionModel
 
 
 def expectile_loss(diff, expectile=0.8):
@@ -49,6 +50,12 @@ class IDQLDiffusion(RWRDiffusion):
                 state_dict_key,
             )
             self.target_q.load_state_dict(self.critic_q.state_dict())
+
+        # Create frozen copy of BC actor for diagnostic support distance computation
+        self.bc_actor_frozen = copy.deepcopy(self.actor).to(self.device)
+        for param in self.bc_actor_frozen.parameters():
+            param.requires_grad = False
+        log.info("copied bc actor for support dist calc")
 
     # ---------- RL training ----------#
 
@@ -142,8 +149,17 @@ class IDQLDiffusion(RWRDiffusion):
         num_sample=10,
         critic_hyperparam=0.7,  # sampling weight for implicit policy
         use_expectile_exploration=True,
+        return_diagnostics=False,
     ):
-        """assume state-only, no rgb in cond"""
+        """assume state-only, no rgb in cond
+        
+            Args:
+            return_diagnostics: (samples, diagnostics_dict) where
+                diagnostics_dict contains:
+                - all_samples: (S, B, H, A) all candidate samples before Q-selection
+                - all_q: (S, B) Q-values for all samples
+                - chosen_indices: (B,) indices of chosen samples
+        """
         # repeat obs num_sample times along dim 0
         cond_shape_repeat_dims = tuple(1 for _ in cond["state"].shape)
         B, T, D = cond["state"].shape
@@ -158,6 +174,7 @@ class IDQLDiffusion(RWRDiffusion):
         )
         _, H, A = samples.shape
 
+        ## *** should sampels be only samples = samples[:, : self.act_steps] as is done in train?
         # get current Q-function
         current_q1, current_q2 = self.target_q({"state": cond_repeat}, samples)
         q = torch.min(current_q1, current_q2)
@@ -174,6 +191,7 @@ class IDQLDiffusion(RWRDiffusion):
             sample_indices = sample_indices.repeat(S, 1, H, A)
 
             samples_best = torch.gather(samples_expanded, 0, sample_indices)
+            chosen_indices = best_indices
         # Sample as an implicit policy for exploration
         else:
             # get the current value function for probabilistic exploration
@@ -189,14 +207,77 @@ class IDQLDiffusion(RWRDiffusion):
             tau_weights = tau_weights / tau_weights.sum(0)  # normalize
 
             # select a sample from DP probabilistically -- sample index per batch and compile
-            sample_indices = torch.multinomial(tau_weights.T, 1)  # [B, 1]
+            sample_indices_multinomial = torch.multinomial(tau_weights.T, 1)  # [B, 1]
+            chosen_indices = sample_indices_multinomial.squeeze(1)  # [B]
 
             # dummy dimension @ dim 0 for batched indexing
-            sample_indices = sample_indices[None, :, None]  # [1, B, 1, 1]
+            sample_indices = sample_indices_multinomial[None, :, None]  # [1, B, 1, 1]
             sample_indices = sample_indices.repeat(S, 1, H, A)
 
             samples_best = torch.gather(samples_expanded, 0, sample_indices)
 
         # squeeze dummy dimension
         samples = samples_best[0]
+        
+        if return_diagnostics:
+            diagnostics = {
+                "all_samples": samples_expanded,  # (S, B, H, A)
+                "all_q": q,  # (S, B)
+                "chosen_indices": chosen_indices,  # (B,)
+            }
+            return samples, diagnostics
         return samples
+    
+    @torch.no_grad()
+    def sample_from_frozen_bc(self, cond, num_samples=64, deterministic=False):
+        """Sample from frozen BC actor without Q-filtering."""
+        B, T, D = cond["state"].shape
+        S = num_samples
+        
+        # Repeat cond for num_samples
+        cond_repeat = cond["state"][None].repeat(num_samples, *(1,) * len(cond["state"].shape))
+        cond_repeat = cond_repeat.view(-1, T, D)  # [B*S, T, D]
+        
+        # Temporarily swap network to frozen BC actor
+        original_network = self.network
+        self.network = self.bc_actor_frozen
+        
+        try:
+            from model.diffusion.sampling import make_timesteps
+            device = self.betas.device
+            x = torch.randn((B * S, self.horizon_steps, self.action_dim), device=device)
+            if self.use_ddim:
+                t_all = self.ddim_t
+            else:
+                t_all = list(reversed(range(self.denoising_steps)))
+            for i, t in enumerate(t_all):
+                t_b = make_timesteps(B * S, t, device)
+                index_b = make_timesteps(B * S, i, device)
+                mean, logvar = self.p_mean_var(
+                    x=x,
+                    t=t_b,
+                    cond={"state": cond_repeat},
+                    index=index_b,
+                )
+                std = torch.exp(0.5 * logvar)
+                if self.use_ddim:
+                    std = torch.zeros_like(std) if deterministic else std
+                else:
+                    if deterministic and t == 0:
+                        std = torch.zeros_like(std)
+                    else:
+                        std = torch.clip(std, min=1e-3)
+                noise = torch.randn_like(x).clamp_(
+                    -self.randn_clip_value, self.randn_clip_value
+                )
+                x = mean + std * noise
+                if self.final_action_clip_value is not None and i == len(t_all) - 1:
+                    x = torch.clamp(
+                        x, -self.final_action_clip_value, self.final_action_clip_value
+                    )
+            _, H, A = x.shape
+            bc_samples = x.view(S, B, H, A)
+        finally:
+            self.network = original_network
+        
+        return bc_samples

@@ -79,4 +79,4 @@ export MUJOCO_GL=egl
 
 # transport idql critic pretrain
 uv run python script/run.py --config-name=pre_idql_critic_mlp \
-    --config-dir=cfg/robomimic/pretrain/transport 
+    --config-dir=cfg/robomimic/pretrain/transport
