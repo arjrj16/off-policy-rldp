@@ -135,14 +135,10 @@ class StitchedSequenceDataset(torch.utils.data.Dataset):
         Not doing validation right now
         """
         num_train = int(len(self.indices) * train_split)
-        train_positions = set(random.sample(range(len(self.indices)), num_train))
-        train_indices = [self.indices[i] for i in range(len(self.indices)) if i in train_positions]
-        val_indices = [self.indices[i] for i in range(len(self.indices)) if i not in train_positions]
+        train_indices = random.sample(self.indices, num_train)
+        val_indices = [i for i in range(len(self.indices)) if i not in train_indices]
         self.indices = train_indices
         return val_indices
-
-    def set_indices(self, indices):
-        self.indices = indices
 
     def __len__(self):
         return len(self.indices)
@@ -253,7 +249,7 @@ class StitchedSequenceQLearningDataset(StitchedSequenceDataset):
             dones = self.dones[start : (start + 1)]
 
         # Account for action horizon
-        if start + self.horizon_steps < len(self.states):
+        if idx < len(self.indices) - self.horizon_steps:
             next_states = self.states[
                 (start - num_before_start + self.horizon_steps) : start
                 + 1

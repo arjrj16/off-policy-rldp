@@ -28,7 +28,6 @@ wandb:
 train:
   n_epochs: 4000
   batch_size: 1000
-  val_split: 0.1
   gamma: 0.999
   critic_lr: 1e-3
   critic_weight_decay: 0
