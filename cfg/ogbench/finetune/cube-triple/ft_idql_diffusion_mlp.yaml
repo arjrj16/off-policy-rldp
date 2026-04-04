@@ -1,0 +1,110 @@
+defaults:
+  - _self_
+hydra:
+  run:
+    dir: ${logdir}
+_target_: agent.finetune.train_idql_diffusion_agent.TrainIDQLDiffusionAgent
+
+name: ${env_name}_idql_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
+logdir: ${oc.env:DPPO_LOG_DIR}/ogbench-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/ogbench-pretrain/cube-triple_idql_critic_pretrain_mlp_ta8/REPLACE_WITH_TIMESTAMP/checkpoint/state_2000.pt
+normalization_path: ${oc.env:DPPO_DATA_DIR}/ogbench/cube-triple/normalization.npz
+
+seed: 42
+device: cuda:0
+env_name: cube-triple-play-singletask-task2-v0
+obs_dim: 46
+action_dim: 5
+denoising_steps: 20
+cond_steps: 1
+horizon_steps: 8
+act_steps: 8
+
+env:
+  n_envs: 50
+  name: ${env_name}
+  env_type: ogbench
+  best_reward_threshold_for_success: 1
+  max_episode_steps: 1000
+  save_video: False
+  wrappers:
+    ogbench_lowdim:
+      normalization_path: ${normalization_path}
+    multi_step:
+      n_obs_steps: ${cond_steps}
+      n_action_steps: ${act_steps}
+      max_episode_steps: ${env.max_episode_steps}
+      reset_within_step: True
+
+wandb:
+  entity: ${oc.env:DPPO_WANDB_ENTITY}
+  project: ogbench-cube-triple-finetune
+  run: ${now:%H-%M-%S}_${name}
+
+train:
+  n_train_itr: 201
+  n_critic_warmup_itr: 5
+  n_steps: 500
+  gamma: 0.999
+  actor_lr: 1e-5
+  actor_weight_decay: 0
+  actor_lr_scheduler:
+    first_cycle_steps: 1000
+    warmup_steps: 10
+    min_lr: 1e-5
+  critic_lr: 1e-3
+  critic_weight_decay: 0
+  critic_lr_scheduler:
+    first_cycle_steps: 1000
+    warmup_steps: 10
+    min_lr: 1e-3
+  save_model_freq: 100
+  val_freq: 10
+  render:
+    freq: 1
+    num: 0
+  scale_reward_factor: 1
+  eval_deterministic: True
+  eval_sample_num: 10
+  critic_tau: 0.001
+  use_expectile_exploration: True
+  buffer_size: 5000
+  replay_ratio: 128
+  batch_size: 1000
+  diagnostic:
+    enabled: true
+    env_idx: 0
+    bc_num_samples: 8
+
+model:
+  _target_: model.diffusion.diffusion_idql.IDQLDiffusion
+  min_sampling_denoising_std: 0.1
+  randn_clip_value: 3
+  network_path: ${base_policy_path}
+  actor:
+    _target_: model.diffusion.mlp_diffusion.DiffusionMLP
+    time_dim: 16
+    mlp_dims: [512, 512, 512]
+    residual_style: True
+    cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
+    horizon_steps: ${horizon_steps}
+    action_dim: ${action_dim}
+  critic_q:
+    _target_: model.common.critic.CriticObsAct
+    action_dim: ${action_dim}
+    action_steps: ${act_steps}
+    cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
+    mlp_dims: [256, 256, 256]
+    activation_type: Mish
+    residual_style: True
+  critic_v:
+    _target_: model.common.critic.CriticObs
+    cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
+    mlp_dims: [256, 256, 256]
+    activation_type: Mish
+    residual_style: True
+  horizon_steps: ${horizon_steps}
+  obs_dim: ${obs_dim}
+  action_dim: ${action_dim}
+  denoising_steps: ${denoising_steps}
+  device: ${device}

@@ -128,6 +128,8 @@ def make_async(
         import gym_avoiding
     elif env_type == "pusht":
         pass  # Push-T env will be created directly, not via gym.make
+    elif env_type == "ogbench":
+        pass  # OGBench env will be created directly via ogbench API
     else:
         import d4rl.gym_mujoco
     from gym.envs import make as make_
@@ -173,6 +175,9 @@ def make_async(
                 render_size=kwargs.get("render_size", 96),
                 render_action=kwargs.get("render_action", True),
             )
+        elif env_type == "ogbench":
+            import ogbench as ogb
+            env = ogb.make_env_and_datasets(id, env_only=True)
         else:  # d3il, gym
             if "kitchen" not in id:  # d4rl kitchen does not support rendering!
                 kwargs["render"] = render

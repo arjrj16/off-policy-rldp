@@ -1,0 +1,62 @@
+defaults:
+  - _self_
+hydra:
+  run:
+    dir: ${logdir}
+_target_: agent.eval.eval_diffusion_agent.EvalDiffusionAgent
+
+name: ${env_name}_eval_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
+logdir: ${oc.env:DPPO_LOG_DIR}/ogbench-eval/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+base_policy_path:
+normalization_path: ${oc.env:DPPO_DATA_DIR}/ogbench/scene/normalization.npz
+
+seed: 42
+device: cuda:0
+env_name: scene-play-singletask-task3-v0
+obs_dim: 40
+action_dim: 5
+denoising_steps: 20
+cond_steps: 1
+horizon_steps: 8
+act_steps: 8
+ft_denoising_steps: 0
+
+n_steps: 375
+render_num: 0
+
+env:
+  n_envs: 50
+  name: ${env_name}
+  env_type: ogbench
+  best_reward_threshold_for_success: 1
+  max_episode_steps: 750
+  save_video: False
+  wrappers:
+    ogbench_lowdim:
+      normalization_path: ${normalization_path}
+    multi_step:
+      n_obs_steps: ${cond_steps}
+      n_action_steps: ${act_steps}
+      max_episode_steps: ${env.max_episode_steps}
+      reset_within_step: True
+
+model:
+  _target_: model.diffusion.diffusion_eval_ft.DiffusionEval
+  ft_denoising_steps: ${ft_denoising_steps}
+  predict_epsilon: True
+  denoised_clip_value: 1.0
+  randn_clip_value: 3
+  network_path: ${base_policy_path}
+  network:
+    _target_: model.diffusion.mlp_diffusion.DiffusionMLP
+    time_dim: 16
+    mlp_dims: [512, 512, 512]
+    residual_style: True
+    cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
+    horizon_steps: ${horizon_steps}
+    action_dim: ${action_dim}
+  horizon_steps: ${horizon_steps}
+  obs_dim: ${obs_dim}
+  action_dim: ${action_dim}
+  denoising_steps: ${denoising_steps}
+  device: ${device}

@@ -4,6 +4,7 @@ from .robomimic_image import RobomimicImageWrapper
 from .d3il_lowdim import D3ilLowdimWrapper
 from .mujoco_locomotion_lowdim import MujocoLocomotionLowdimWrapper
 from .pusht_lowdim import PushTLowdimWrapper
+from .ogbench_lowdim import OGBenchLowdimWrapper
 
 
 wrapper_dict = {
@@ -13,4 +14,5 @@ wrapper_dict = {
     "d3il_lowdim": D3ilLowdimWrapper,
     "mujoco_locomotion_lowdim": MujocoLocomotionLowdimWrapper,
     "pusht_lowdim": PushTLowdimWrapper,
+    "ogbench_lowdim": OGBenchLowdimWrapper,
 }

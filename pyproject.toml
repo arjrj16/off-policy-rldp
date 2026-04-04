@@ -40,7 +40,7 @@ gym = [
 kitchen = [
     "cython<3",
     "d4rl",
-    "dm_control==1.0.16",
+    "dm_control>=1.0.16",
     "mujoco==3.1.6",
     "patchelf",
 ]
@@ -50,6 +50,10 @@ robomimic = [
     "patchelf",
     "robomimic @ git+https://github.com/ARISE-Initiative/robomimic.git",
     "robosuite @ git+https://github.com/ARISE-Initiative/robosuite.git@v1.4.1",
+]
+ogbench = [
+    "ogbench",
+    "gymnasium",
 ]
 d3il = [
     "cython<3",
