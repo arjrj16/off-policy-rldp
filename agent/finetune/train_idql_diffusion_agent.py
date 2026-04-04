@@ -22,6 +22,60 @@ from agent.finetune.train_agent import TrainAgent
 from util.scheduler import CosineAnnealingWarmupRestarts
 
 
+def load_demo_transitions(dataset_path, act_steps, cond_steps, scale_reward_factor):
+    """Load offline demonstration data and convert to replay-buffer-compatible transitions."""
+    dataset = np.load(dataset_path, allow_pickle=False)
+    states = dataset["states"].astype(np.float32)
+    actions = dataset["actions"].astype(np.float32)
+    traj_lengths = dataset["traj_lengths"]
+    rewards = dataset["rewards"].astype(np.float32) if "rewards" in dataset else None
+    terminals = dataset["terminals"].astype(np.float32) if "terminals" in dataset else None
+
+    obs_list, next_obs_list, act_list = [], [], []
+    rew_list, term_list, trunc_list = [], [], []
+
+    offset = 0
+    for length in traj_lengths:
+        length = int(length)
+        traj_states = states[offset : offset + length]
+        traj_actions = actions[offset : offset + length]
+
+        max_start = length - act_steps
+        for t in range(max_start + 1):
+            if t + act_steps >= length:
+                next_obs = traj_states[-1]
+            else:
+                next_obs = traj_states[t + act_steps]
+
+            obs_list.append(traj_states[t].reshape(cond_steps, -1))
+            next_obs_list.append(next_obs.reshape(cond_steps, -1))
+            act_list.append(traj_actions[t : t + act_steps])
+
+            is_terminal_chunk = (t + act_steps >= length)
+            if rewards is not None and is_terminal_chunk:
+                rew_list.append(rewards[offset + length - 1] * scale_reward_factor)
+            else:
+                rew_list.append(0.0)
+            term_list.append(1.0 if is_terminal_chunk else 0.0)
+            trunc_list.append(0.0)
+
+        offset += length
+
+    result = {
+        "obs": np.array(obs_list),
+        "next_obs": np.array(next_obs_list),
+        "actions": np.array(act_list),
+        "rewards": np.array(rew_list, dtype=np.float32),
+        "terminated": np.array(term_list, dtype=np.float32),
+        "truncated": np.array(trunc_list, dtype=np.float32),
+    }
+    log.info(
+        f"Loaded {len(obs_list)} demo transitions from {dataset_path} "
+        f"({len(traj_lengths)} trajectories, {int(np.sum(term_list))} terminal)"
+    )
+    return result
+
+
 class TrainIDQLDiffusionAgent(TrainAgent):
 
     def __init__(self, cfg):
@@ -101,6 +155,22 @@ class TrainIDQLDiffusionAgent(TrainAgent):
 
         # Sampling
         self.num_sample = cfg.train.eval_sample_num
+
+        # Demo buffer priming
+        demo_cfg = cfg.train.get("demo_buffer", None)
+        if demo_cfg is not None and demo_cfg.get("enabled", False):
+            self.demo_data = load_demo_transitions(
+                dataset_path=demo_cfg.dataset_path,
+                act_steps=self.act_steps,
+                cond_steps=cfg.cond_steps,
+                scale_reward_factor=self.scale_reward_factor,
+            )
+            self.demo_batch_fraction = demo_cfg.get("batch_fraction", 0.25)
+            log.info(f"Demo buffer priming enabled: {len(self.demo_data['obs'])} transitions, "
+                     f"batch fraction {self.demo_batch_fraction}")
+        else:
+            self.demo_data = None
+            self.demo_batch_fraction = 0.0
         
         # Diagnostic tracking
         self.diagnostic_enabled = cfg.train.get("diagnostic", {}).get("enabled", False)
@@ -452,26 +522,36 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 reward_trajs = reward_trajs.reshape(-1)
                 terminated_trajs = terminated_trajs.reshape(-1)
                 truncated_trajs = truncated_trajs.reshape(-1)
+
+                n_online = len(obs_trajs)
+                if self.demo_data is not None:
+                    n_demo_per_batch = int(self.batch_size * self.demo_batch_fraction)
+                    n_online_per_batch = self.batch_size - n_demo_per_batch
+                else:
+                    n_demo_per_batch = 0
+                    n_online_per_batch = self.batch_size
+
                 for _ in range(num_batch):
 
-                    # Sample batch
-                    inds = np.random.choice(len(obs_trajs), self.batch_size)
+                    # Sample online portion of batch
+                    inds = np.random.choice(n_online, n_online_per_batch)
                     obs_b = torch.from_numpy(obs_trajs[inds]).float().to(self.device)
-                    next_obs_b = (
-                        torch.from_numpy(next_obs_trajs[inds]).float().to(self.device)
-                    )
-                    actions_b = (
-                        torch.from_numpy(action_trajs[inds]).float().to(self.device)
-                    )
-                    reward_b = (
-                        torch.from_numpy(reward_trajs[inds]).float().to(self.device)
-                    )
-                    terminated_b = (
-                        torch.from_numpy(terminated_trajs[inds]).float().to(self.device)
-                    )
-                    truncated_b = (
-                        torch.from_numpy(truncated_trajs[inds]).float().to(self.device)
-                    )
+                    next_obs_b = torch.from_numpy(next_obs_trajs[inds]).float().to(self.device)
+                    actions_b = torch.from_numpy(action_trajs[inds]).float().to(self.device)
+                    reward_b = torch.from_numpy(reward_trajs[inds]).float().to(self.device)
+                    terminated_b = torch.from_numpy(terminated_trajs[inds]).float().to(self.device)
+                    truncated_b = torch.from_numpy(truncated_trajs[inds]).float().to(self.device)
+
+                    # Mix in demo transitions
+                    if n_demo_per_batch > 0:
+                        d = self.demo_data
+                        d_inds = np.random.choice(len(d["obs"]), n_demo_per_batch)
+                        obs_b = torch.cat([obs_b, torch.from_numpy(d["obs"][d_inds]).float().to(self.device)])
+                        next_obs_b = torch.cat([next_obs_b, torch.from_numpy(d["next_obs"][d_inds]).float().to(self.device)])
+                        actions_b = torch.cat([actions_b, torch.from_numpy(d["actions"][d_inds]).float().to(self.device)])
+                        reward_b = torch.cat([reward_b, torch.from_numpy(d["rewards"][d_inds]).float().to(self.device)])
+                        terminated_b = torch.cat([terminated_b, torch.from_numpy(d["terminated"][d_inds]).float().to(self.device)])
+                        truncated_b = torch.cat([truncated_b, torch.from_numpy(d["truncated"][d_inds]).float().to(self.device)])
 
                     # update critic value function
                     critic_loss_v = self.model.loss_critic_v(

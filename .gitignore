@@ -145,3 +145,7 @@ dmypy.json
 cfg/robomimic/*.sh
 
 *.out
+
+compare_out/
+data_official/
+data_unofficial/
