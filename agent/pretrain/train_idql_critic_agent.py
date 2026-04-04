@@ -51,6 +51,7 @@ class TrainIDQLCriticPretrainAgent:
         self.critic_tau = cfg.train.critic_tau
         self.log_freq = cfg.train.get("log_freq", 1)
         self.save_model_freq = cfg.train.save_model_freq
+        self.max_grad_norm = cfg.train.get("max_grad_norm", 1.0)
 
         # Logging, checkpoints
         self.logdir = cfg.logdir
@@ -135,6 +136,9 @@ class TrainIDQLCriticPretrainAgent:
                 loss_v = self.model.loss_critic_v(obs, actions)
                 self.critic_v_optimizer.zero_grad()
                 loss_v.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.critic_v.parameters(), self.max_grad_norm
+                )
                 self.critic_v_optimizer.step()
 
                 # Update critic Q
@@ -148,6 +152,9 @@ class TrainIDQLCriticPretrainAgent:
                 )
                 self.critic_q_optimizer.zero_grad()
                 loss_q.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.critic_q.parameters(), self.max_grad_norm
+                )
                 self.critic_q_optimizer.step()
 
                 # Update target critic

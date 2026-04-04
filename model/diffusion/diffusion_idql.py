@@ -105,8 +105,10 @@ class IDQLDiffusion(RWRDiffusion):
         next_v = next_v.view(-1)
         mask = mask.view(-1)
 
-        # target value
+        # target value — clamp to prevent overestimation runaway
         discounted_q = rewards + gamma * next_v * mask
+        max_q = 1.0 / (1.0 - gamma) if gamma < 1.0 else float("inf")
+        discounted_q = discounted_q.clamp(-max_q, max_q)
 
         # Update critic
         q_loss = torch.mean((current_q1 - discounted_q) ** 2) + torch.mean(
