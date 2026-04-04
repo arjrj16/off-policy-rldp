@@ -158,7 +158,7 @@ class StitchedSequenceQLearningDataset(StitchedSequenceDataset):
         discount_factor=1.0,
         device="cuda:0",
         get_mc_return=False,
-        reward_mode="start",
+        reward_mode="end",
         **kwargs,
     ):
         if dataset_path.endswith(".npz"):

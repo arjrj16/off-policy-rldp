@@ -43,13 +43,21 @@ class IDQLDiffusion(RWRDiffusion):
                 network_path, map_location=self.device, weights_only=True
             )
             state_dict_key = "ema" if "ema" in checkpoint else "model"
-            self.load_state_dict(checkpoint[state_dict_key], strict=False)
+            loaded_sd = checkpoint[state_dict_key]
+            self.load_state_dict(loaded_sd, strict=False)
             log.info(
                 "Loaded full state dict from %s using key '%s'",
                 network_path,
                 state_dict_key,
             )
-            self.target_q.load_state_dict(self.critic_q.state_dict())
+            has_pretrained_target_q = any(
+                k.startswith("target_q.") for k in loaded_sd
+            )
+            if not has_pretrained_target_q:
+                self.target_q.load_state_dict(self.critic_q.state_dict())
+                log.info("Synced target_q from critic_q (no pretrained target_q in checkpoint)")
+            else:
+                log.info("Preserved pretrained target_q from checkpoint")
 
         # Create frozen copy of BC actor for diagnostic support distance computation
         self.bc_actor_frozen = copy.deepcopy(self.actor).to(self.device)

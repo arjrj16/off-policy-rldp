@@ -26,7 +26,7 @@ wandb:
   run: ${now:%H-%M-%S}_${name}
 
 train:
-  n_epochs: 4000
+  n_epochs: 999999
   batch_size: 1000
   gamma: 0.999
   critic_lr: 1e-3
@@ -34,7 +34,7 @@ train:
   critic_lr_scheduler:
     first_cycle_steps: 1000
     warmup_steps: 10
-    min_lr: 1e-3
+    min_lr: 1e-4
   save_model_freq: 100
   log_freq: 1
   critic_tau: 0.001
