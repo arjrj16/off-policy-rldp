@@ -32,7 +32,7 @@ train:
     first_cycle_steps: 3000
     warmup_steps: 100
     min_lr: 1e-5
-  save_model_freq: 500
+  save_model_freq: 100
 
 model:
   _target_: model.diffusion.diffusion.DiffusionModel

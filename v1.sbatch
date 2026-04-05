@@ -14,11 +14,11 @@ set -e -o pipefail
 source ~/.bashrc
 
 # Go to DPPO project directory
-cd $W/off-policy-rldp
+cd $W/off-policy-rldp-ogbench
 
 # Set required environment variables
-export DPPO_DATA_DIR=$W/off-policy-rldp/data      # where datasets/normalization are stored
-export DPPO_LOG_DIR=$W/off-policy-rldp/log        # where checkpoints/logs go
+export DPPO_DATA_DIR=$W/off-policy-rldp-ogbench/data      # where datasets/normalization are stored
+export DPPO_LOG_DIR=$W/off-policy-rldp-ogbench/log        # where checkpoints/logs go
 export DPPO_WANDB_ENTITY=arjunmelwani-massachusetts-institute-of-technology                       # your WandB username (or set wandb=null below)
 # Suppress d4rl import warnings
 export D4RL_SUPPRESS_IMPORT_ERROR=1
@@ -75,3 +75,9 @@ uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 # transport pretrain
 # uv run python script/run.py --config-name=pre_diffusion_mlp \
 #     --config-dir=cfg/robomimic/pretrain/transport
+
+# OGBench - cube-triple pretrain
+# uv run python script/run.py --config-name=pre_diffusion_mlp --config-dir=cfg/ogbench/pretrain/cube-triple
+
+# OGBench - cube-triple IDQL finetune
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp --config-dir=cfg/ogbench/finetune/cube-triple
