@@ -80,4 +80,4 @@ uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 # uv run python script/run.py --config-name=pre_diffusion_mlp --config-dir=cfg/ogbench/pretrain/cube-triple
 
 # OGBench - cube-triple IDQL finetune
-# uv run python script/run.py --config-name=ft_idql_diffusion_mlp --config-dir=cfg/ogbench/finetune/cube-triple
+uv run python script/run.py --config-name=ft_idql_diffusion_mlp --config-dir=cfg/ogbench/finetune/cube-triple
