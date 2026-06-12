@@ -87,6 +87,14 @@ class TrainIDQLDiffusionAgent(TrainAgent):
         self.use_bc_warmup = cfg.train.get("use_bc_warmup", False)
         self.bc_warmup_iters = cfg.train.get("bc_warmup_iters", 0)
         if self.use_bc_warmup:
+            # Guard against the silent no-op: with the default bc_warmup_iters=0
+            # the warmup condition (itr < 0) never fires even though the log
+            # below claims warmup is on.
+            if self.bc_warmup_iters <= 0:
+                raise ValueError(
+                    "use_bc_warmup=True requires bc_warmup_iters > 0 "
+                    f"(got {self.bc_warmup_iters})"
+                )
             log.info(f"BC warm-up enabled: using BC policy without Q-filtering for first {self.bc_warmup_iters} iterations")
 
         # Scaling reward
@@ -173,7 +181,14 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 # if done at the end of last iteration, the envs are just reset
                 firsts_trajs[0] = done_venv
             reward_trajs = np.zeros((self.n_steps, self.n_envs))
-            
+            # Per-step success flags from the env's info dict. OGBench's
+            # reward-threshold success metric is unusable here (rewards are
+            # -n_subtasks..0, so max(chunk)/act_steps <= 0 can never reach the
+            # DPPO-style threshold of 1); OGBench reports info["success"]
+            # explicitly, so use that when available.
+            success_trajs = np.zeros((self.n_steps, self.n_envs), dtype=bool)
+            has_success_info = False
+
             diag_episode_data_this_itr = []
 
             # Collect a set of trajectories from env
@@ -189,8 +204,15 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                         .to(self.device)
                     }
                     
-                    # Determine if we should use BC warm-up
-                    use_bc_warmup_this_step = self.use_bc_warmup and (self.itr < self.bc_warmup_iters)
+                    # Determine if we should use BC warm-up. Excluded in eval
+                    # mode: eval iterations should measure the learned IDQL
+                    # policy, not the frozen BC actor, otherwise the first
+                    # bc_warmup_iters of the eval curve are meaningless.
+                    use_bc_warmup_this_step = (
+                        self.use_bc_warmup
+                        and (self.itr < self.bc_warmup_iters)
+                        and not eval_mode
+                    )
                     
                     # Get action with diagnostics if enabled
                     if self.diagnostic_enabled:
@@ -297,6 +319,17 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 done_venv = terminated_venv | truncated_venv
                 reward_trajs[step] = reward_venv
                 firsts_trajs[step + 1] = done_venv
+
+                # MultiStep keeps the info of the last executed inner step, so
+                # at a terminal chunk this is the success step itself (OGBench
+                # terminates at goal). Guarded so non-OGBench envs without the
+                # key fall back to the reward-threshold metric below.
+                for env_ind in range(self.n_envs):
+                    if "success" in info_venv[env_ind]:
+                        success_trajs[step, env_ind] = bool(
+                            np.asarray(info_venv[env_ind]["success"]).reshape(-1)[-1]
+                        )
+                        has_success_info = True
                 
                 if self.diagnostic_enabled and diag_current_episode is not None:
                     # Store scaled reward
@@ -365,7 +398,11 @@ class TrainIDQLDiffusionAgent(TrainAgent):
 
                 # add to buffer
                 if not eval_mode:
-                    obs_venv_copy = obs_venv.copy()
+                    # Deep-copy the state array: dict.copy() is shallow, so the
+                    # final_obs write below would also mutate obs_venv["state"]
+                    # and hence prev_obs_venv — the next action would condition
+                    # on the dead episode's last obs instead of the reset obs.
+                    obs_venv_copy = {"state": obs_venv["state"].copy()}
                     for i in range(self.n_envs):
                         if truncated_venv[i]:
                             obs_venv_copy["state"][i] = info_venv[i]["final_obs"][
@@ -413,9 +450,20 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 )
                 avg_episode_reward = np.mean(episode_reward)
                 avg_best_reward = np.mean(episode_best_reward)
-                success_rate = np.mean(
-                    episode_best_reward >= self.best_reward_threshold_for_success
-                )
+                if has_success_info:
+                    # An episode succeeded if any of its steps reported
+                    # success (OGBench terminates at the success step).
+                    episode_success = np.array(
+                        [
+                            success_trajs[start : end + 1, env_ind].any()
+                            for env_ind, start, end in episodes_start_end
+                        ]
+                    )
+                    success_rate = np.mean(episode_success)
+                else:
+                    success_rate = np.mean(
+                        episode_best_reward >= self.best_reward_threshold_for_success
+                    )
             else:
                 episode_reward = np.array([])
                 num_episode_finished = 0
@@ -601,6 +649,7 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                             "loss - actor": loss_actor,
                             "loss - critic": loss_critic,
                             "avg episode reward - train": avg_episode_reward,
+                            "success rate - train": success_rate,
                             "num episode - train": num_episode_finished,
                         }
                         

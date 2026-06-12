@@ -7,13 +7,13 @@ _target_: agent.finetune.train_idql_diffusion_agent.TrainIDQLDiffusionAgent
 
 name: ${env_name}_idql_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/ogbench-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: /home/melwani/67920/code2/off-policy-rldp-ogbench/log/ogbench-pretrain/cube-triple_pre_diffusion_mlp_ta8_td20/2026-04-04_22-13-37_42/checkpoint/state_400.pt
-normalization_path: ${oc.env:DPPO_DATA_DIR}/ogbench/cube-triple/normalization.npz
+base_policy_path: ${oc.env:DPPO_LOG_DIR}/ogbench-pretrain/cube-single_pre_diffusion_mlp_ta8_td20/2026-04-05_21-15-27_42/checkpoint/state_200.pt
+normalization_path: ${oc.env:DPPO_DATA_DIR}/ogbench/cube-single/normalization.npz
 
 seed: 42
 device: cuda:0
-env_name: cube-triple-play-singletask-task2-v0
-obs_dim: 46
+env_name: cube-single-play-singletask-task1-v0
+obs_dim: 28
 action_dim: 5
 denoising_steps: 20
 cond_steps: 1
@@ -25,7 +25,7 @@ env:
   name: ${env_name}
   env_type: ogbench
   best_reward_threshold_for_success: 1
-  max_episode_steps: 1000
+  max_episode_steps: 200
   save_video: False
   wrappers:
     ogbench_lowdim:
@@ -38,7 +38,7 @@ env:
 
 wandb:
   entity: ${oc.env:DPPO_WANDB_ENTITY}
-  project: ogbench-cube-triple-finetune
+  project: ogbench-cube-single-finetune
   run: ${now:%H-%M-%S}_${name}
 
 train:
@@ -52,7 +52,7 @@ train:
   # the one collecting.
   use_bc_warmup: False
   bc_warmup_iters: 0
-  n_steps: 500
+  n_steps: 100
   gamma: 0.999
   actor_lr: 1e-5
   actor_weight_decay: 0

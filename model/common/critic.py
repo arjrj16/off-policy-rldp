@@ -65,13 +65,16 @@ class CriticObsAct(torch.nn.Module):
         action_steps=1,
         activation_type="Mish",
         use_layernorm=False,
-        residual_tyle=False,
+        # Typo fix (was "residual_tyle"): configs pass residual_style=True,
+        # which **kwargs silently swallowed, so the Q networks were built as
+        # plain MLPs while the V critic got the ResidualMLP it asked for.
+        residual_style=False,
         double_q=True,
         **kwargs,
     ):
         super().__init__()
         mlp_dims = [cond_dim + action_dim * action_steps] + mlp_dims + [1]
-        if residual_tyle:
+        if residual_style:
             model = ResidualMLP
         else:
             model = MLP

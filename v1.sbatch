@@ -1,10 +1,13 @@
 #!/bin/bash
 
-#SBATCH -J idql-train                  # job name
+#SBATCH -J idql-train-og-bench                  # job name
 #SBATCH -p mit_normal_gpu              # partition
-#SBATCH --gres=gpu:l40:1               # 1x L40 GPU
+#SBATCH --gres=gpu:l40:1               # 1x H200 GPU
 #SBATCH -N 1                           # 1 node
-#SBATCH --cpus-per-task=16             # CPUs for parallel envs
+# Pretrain needs little CPU (DataLoader num_workers=0 on cuda datasets) but
+# 1G was marginal (torch + CUDA context + 132MB dataset). Finetune runs 50
+# async MuJoCo workers -> bump to ~16 CPUs / 32G before switching the command.
+#SBATCH --cpus-per-task=16            # CPUs for parallel envs
 #SBATCH --mem=32G                      # memory
 #SBATCH -t 06:00:00                    # walltime limit
 #SBATCH -o logs/%x-%j.out              # log file
@@ -61,8 +64,8 @@ export MUJOCO_GL=egl
 #     --config-dir=cfg/gym/scratch/hopper-v2
 
 # # Option 6: Robomimic - transport
-uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
-    --config-dir=cfg/robomimic/finetune/transport 
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
+#     --config-dir=cfg/robomimic/finetune/transport 
 
 # # Option 7: push-t - IDQL
 # uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
@@ -80,4 +83,11 @@ uv run python script/run.py --config-name=ft_idql_diffusion_mlp \
 # uv run python script/run.py --config-name=pre_diffusion_mlp --config-dir=cfg/ogbench/pretrain/cube-triple
 
 # OGBench - cube-triple IDQL finetune
-uv run python script/run.py --config-name=ft_idql_diffusion_mlp --config-dir=cfg/ogbench/finetune/cube-triple
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp --config-dir=cfg/ogbench/finetune/cube-triple
+
+
+#OG BENCH - singel cube pretrain:
+# uv run python script/run.py --config-name=pre_diffusion_mlp --config-dir=cfg/ogbench/pretrain/cube-single
+
+# OGBench - cube-single IDQL finetune
+uv run python script/run.py --config-name=ft_idql_diffusion_mlp --config-dir=cfg/ogbench/finetune/cube-single

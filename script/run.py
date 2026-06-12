@@ -63,8 +63,13 @@ def main(cfg: OmegaConf):
         )
         gdown.download(url=download_url, output=download_target, fuzzy=True)
 
-    # For for-tuning: download checkpoint if needed
-    if "base_policy_path" in cfg and not os.path.exists(cfg.base_policy_path):
+    # For fine-tuning: download checkpoint if needed. The None check lets the
+    # no-pretraining arm be launched with base_policy_path=null (the old `in
+    # cfg` test passed for a null-valued key and os.path.exists(None) raised
+    # TypeError before the agent was even built).
+    if cfg.get("base_policy_path", None) is not None and not os.path.exists(
+        cfg.base_policy_path
+    ):
         download_url = get_checkpoint_download_url(cfg)
         if download_url is None:
             raise ValueError(

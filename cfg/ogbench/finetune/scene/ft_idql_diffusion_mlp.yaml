@@ -44,6 +44,14 @@ wandb:
 train:
   n_train_itr: 201
   n_critic_warmup_itr: 5
+  # BC warm-up arm switches: explicit here so each experiment arm is a plain
+  # CLI override (previously absent -> trainer silently defaulted to off and
+  # enabling required '+' overrides). When turning on, consider also raising
+  # n_critic_warmup_itr to bc_warmup_iters + 5 (robomimic transport recipe) so
+  # the actor does not train on warmup data while the frozen BC actor is still
+  # the one collecting.
+  use_bc_warmup: False
+  bc_warmup_iters: 0
   n_steps: 375
   gamma: 0.999
   actor_lr: 1e-5
@@ -80,6 +88,15 @@ model:
   _target_: model.diffusion.diffusion_idql.IDQLDiffusion
   min_sampling_denoising_std: 0.1
   randn_clip_value: 3
+  # Clip final sampled actions to the normalized action range so the replay
+  # buffer stores what the env actually receives (MuJoCo saturates ctrl
+  # internally, so unclipped commands trained the critic/BC on actions that
+  # differed from the executed ones).
+  final_action_clip_value: 1.0
+  # Single expectile tau, used for BOTH the V expectile loss and the
+  # implicit-policy sampling weights (IDQL paper uses one parameter; the code
+  # previously hardcoded 0.8 for V and 0.7 for sampling).
+  expectile: 0.7
   network_path: ${base_policy_path}
   actor:
     _target_: model.diffusion.mlp_diffusion.DiffusionMLP

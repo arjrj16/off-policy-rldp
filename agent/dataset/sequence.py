@@ -132,13 +132,27 @@ class StitchedSequenceDataset(torch.utils.data.Dataset):
 
     def set_train_val_split(self, train_split):
         """
-        Not doing validation right now
+        Fix: the old version sampled (start, num_before_start) TUPLES into
+        train_indices, then tested integer positions against that tuple list —
+        always False, so val_indices became every position (an O(N^2) scan,
+        hours on a 1M-step dataset) and the ints later crashed __getitem__'s
+        tuple unpack. Sample POSITIONS instead and return index tuples that
+        __getitem__ can consume directly.
         """
         num_train = int(len(self.indices) * train_split)
-        train_indices = random.sample(self.indices, num_train)
-        val_indices = [i for i in range(len(self.indices)) if i not in train_indices]
-        self.indices = train_indices
+        train_positions = set(random.sample(range(len(self.indices)), num_train))
+        val_indices = [
+            self.indices[i]
+            for i in range(len(self.indices))
+            if i not in train_positions
+        ]
+        self.indices = [self.indices[i] for i in sorted(train_positions)]
         return val_indices
+
+    def set_indices(self, indices):
+        """Used by PreTrainAgent to turn a deepcopy of the train dataset into
+        the val dataset; was called but never defined (AttributeError)."""
+        self.indices = indices
 
     def __len__(self):
         return len(self.indices)

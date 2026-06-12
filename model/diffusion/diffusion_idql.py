@@ -28,6 +28,7 @@ class IDQLDiffusion(RWRDiffusion):
         actor,
         critic_q,
         critic_v,
+        expectile=0.7,
         mask_truncated=False,
         **kwargs,
     ):
@@ -35,6 +36,13 @@ class IDQLDiffusion(RWRDiffusion):
         self.critic_q = critic_q.to(self.device)
         self.target_q = copy.deepcopy(critic_q)
         self.critic_v = critic_v.to(self.device)
+
+        # Single expectile tau used BOTH for the V expectile regression and
+        # the implicit-policy sampling weights w = |tau - 1(adv < 0)|. The
+        # IDQL paper (arXiv:2304.10573) and official code (jaxrl5 ddpm_iql)
+        # share one parameter; previously V used a hardcoded 0.8 while
+        # sampling used 0.7.
+        self.expectile = expectile
 
         # assign actor
         self.actor = self.network
@@ -67,8 +75,9 @@ class IDQLDiffusion(RWRDiffusion):
     def loss_critic_v(self, obs, actions):
         adv = self.compute_advantages(obs, actions)
 
-        # get the value loss
-        v_loss = expectile_loss(adv).mean()
+        # get the value loss — pass the shared tau (the call previously fell
+        # through to expectile_loss's 0.8 default, diverging from sampling)
+        v_loss = expectile_loss(adv, self.expectile).mean()
         return v_loss
 
     def loss_critic_q(self, obs, next_obs, actions, rewards, terminated, truncated, gamma):
@@ -132,7 +141,7 @@ class IDQLDiffusion(RWRDiffusion):
             loss = F.mse_loss(x_recon, x_start)
         return loss.mean()
 
-    # ---------- Sampling ----------#``
+    # ---------- Sampling ----------#
 
     # override
     @torch.no_grad()
@@ -141,7 +150,7 @@ class IDQLDiffusion(RWRDiffusion):
         cond,
         deterministic=False,
         num_sample=10,
-        critic_hyperparam=0.7,  # sampling weight for implicit policy
+        critic_hyperparam=None,  # sampling tau; defaults to self.expectile
         use_expectile_exploration=True,
         return_diagnostics=False,
         use_bc_warmup=False,
@@ -233,8 +242,10 @@ class IDQLDiffusion(RWRDiffusion):
             # Compute weights for sampling
             samples_expanded = samples.view(S, B, H, A)
 
-            # expectile exploration policy
-            tau_weights = torch.where(adv > 0, critic_hyperparam, 1 - critic_hyperparam)
+            # expectile exploration policy — must use the SAME tau as the V
+            # expectile loss (paper: w(s,a) = |tau - 1(adv < 0)| with V_tau)
+            tau = self.expectile if critic_hyperparam is None else critic_hyperparam
+            tau_weights = torch.where(adv > 0, tau, 1 - tau)
             tau_weights = tau_weights / tau_weights.sum(0)  # normalize
 
             # select a sample from DP probabilistically -- sample index per batch and compile

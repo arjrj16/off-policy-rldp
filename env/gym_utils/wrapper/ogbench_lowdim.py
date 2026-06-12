@@ -27,6 +27,12 @@ class OGBenchLowdimWrapper(gym.Env):
         self.render_hw = render_hw
         self.video_writer = None
 
+        # Seed to pass to the underlying gymnasium env on the NEXT reset only.
+        # Previously seed() seeded just the worker-global numpy RNG, which the
+        # OGBench reset path never reads (it uses self.np_random), so initial
+        # states were not reproducible from cfg.seed.
+        self._pending_seed = None
+
         # Load normalization stats produced by process_ogbench_dataset.py
         normalization = np.load(normalization_path)
         self.obs_min = normalization["obs_min"].astype(np.float32)
@@ -60,6 +66,10 @@ class OGBenchLowdimWrapper(gym.Env):
         return action * (self.action_max - self.action_min) + self.action_min
 
     def seed(self, seed=None):
+        # Defer to the next reset: gymnasium only re-derives env.np_random when
+        # a seed is passed to reset(), and it must be passed exactly once or
+        # every episode would replay the same initial state.
+        self._pending_seed = seed
         if seed is not None:
             np.random.seed(seed=seed)
         else:
@@ -88,7 +98,13 @@ class OGBenchLowdimWrapper(gym.Env):
         if new_seed is not None:
             self.seed(seed=new_seed)
 
-        obs, info = self.env.reset(options=gym_options if gym_options else None)
+        # Apply a pending seed exactly once so the 50 vectorized envs are
+        # reproducible (seed+i each) yet evolve independently afterwards.
+        reset_kwargs = {"options": gym_options if gym_options else None}
+        if self._pending_seed is not None:
+            reset_kwargs["seed"] = self._pending_seed
+            self._pending_seed = None
+        obs, info = self.env.reset(**reset_kwargs)
         obs = self.normalize_obs(obs)
 
         if self.video_writer is not None:
@@ -109,6 +125,17 @@ class OGBenchLowdimWrapper(gym.Env):
                 self.video_writer.append_data(video_img)
 
         done = terminated or truncated
+        # Preserve the terminated/truncated distinction across the old-gym
+        # 4-tuple API using the convention MultiStep already decodes: set
+        # "TimeLimit.truncated" only on a pure timeout (mirrors old gym's
+        # TimeLimit wrapper, so MultiStep's own step counter stays active for
+        # the no-flag case). Without this, gymnasium TimeLimit timeouts arrive
+        # as plain done=True and MultiStep records them as terminations, so the
+        # critic skips bootstrapping at timeouts and final_obs is never saved.
+        # Termination (success) takes precedence if both fire on the same step.
+        if truncated and not terminated:
+            info = dict(info)
+            info["TimeLimit.truncated"] = True
         return {"state": obs}, reward, done, info
 
     def render(self, mode="rgb_array"):

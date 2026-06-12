@@ -141,9 +141,13 @@ class MultiStep(gym.Wrapper):
         truncated = False
         terminated = False
         for act_step, act in enumerate(action):
-            self.cnt += 1
+            # Increment after the break check so cnt counts steps actually
+            # executed; the old order counted one phantom step whenever the
+            # episode ended mid-chunk, which could trigger the cnt-based
+            # truncation one step early.
             if terminated or truncated:
                 break
+            self.cnt += 1
 
             # done does not differentiate terminal and truncation
             observation, reward, done, info = self.env.step(act)
@@ -162,7 +166,12 @@ class MultiStep(gym.Wrapper):
                     truncated = True
             else:
                 truncated = info["TimeLimit.truncated"]
-                terminated = done
+                # A flagged timeout has done=True too; the old `terminated =
+                # done` marked those steps as BOTH terminated and truncated,
+                # so the trainer's (1 - terminated) mask still killed the
+                # bootstrap at timeouts. A done step is terminal only if it
+                # was not a pure timeout.
+                terminated = done and not truncated
             done = truncated or terminated
             self.done.append(done)
             self._add_info(info)
