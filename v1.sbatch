@@ -103,10 +103,10 @@ export MUJOCO_GL=egl
 # uv run python script/run.py --config-name=pre_diffusion_mlp --config-dir=cfg/ogbench/pretrain/cube-double
 
 # OGBench - cube-double IDQL critic pretrain
-# uv run python script/run.py --config-name=pre_idql_critic_mlp --config-dir=cfg/ogbench/pretrain/cube-double
+uv run python script/run.py --config-name=pre_idql_critic_mlp --config-dir=cfg/ogbench/pretrain/cube-double
 
 # OGBench - cube-double IDQL finetune (set base_policy_path timestamp first;
 # add model.critic_path=.../checkpoint/state_500.pt for the critic-pretrained arm,
 # train.use_bc_warmup=true train.bc_warmup_iters=K for the BC-warmup arm,
 # env.save_video=true train.render.num=1 to upload rollout videos to wandb)
-uv run python script/run.py --config-name=ft_idql_diffusion_mlp --config-dir=cfg/ogbench/finetune/cube-double
+# uv run python script/run.py --config-name=ft_idql_diffusion_mlp --config-dir=cfg/ogbench/finetune/cube-double
