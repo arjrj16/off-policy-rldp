@@ -177,7 +177,16 @@ def make_async(
             )
         elif env_type == "ogbench":
             import ogbench as ogb
-            env = ogb.make_env_and_datasets(id, env_only=True)
+            ogbench_kwargs = {}
+            if render or render_offscreen:
+                # gymnasium requires render_mode at construction for render()
+                # to be legal; OGBench creates its MuJoCo renderer lazily on
+                # the first render() call, so the n_envs - n_render envs that
+                # never record pay no EGL/renderer cost.
+                ogbench_kwargs.update(
+                    render_mode="rgb_array", width=256, height=256
+                )
+            env = ogb.make_env_and_datasets(id, env_only=True, **ogbench_kwargs)
         else:  # d3il, gym
             if "kitchen" not in id:  # d4rl kitchen does not support rendering!
                 kwargs["render"] = render

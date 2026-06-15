@@ -119,12 +119,19 @@ class OGBenchLowdimWrapper(gym.Env):
         obs, reward, terminated, truncated, info = self.env.step(raw_action)
         obs = self.normalize_obs(obs)
 
+        done = terminated or truncated
+
         if self.video_writer is not None:
             video_img = self.render(mode="rgb_array")
             if video_img is not None:
                 self.video_writer.append_data(video_img)
-
-        done = terminated or truncated
+            # Finalize the mp4 as soon as the episode ends: with
+            # reset_within_step the wrapper-internal reset gets no options, so
+            # nothing reopens the writer, and the trainer uploads the file to
+            # wandb at the end of the iteration — it must be closed by then.
+            if done:
+                self.video_writer.close()
+                self.video_writer = None
         # Preserve the terminated/truncated distinction across the old-gym
         # 4-tuple API using the convention MultiStep already decodes: set
         # "TimeLimit.truncated" only on a pure timeout (mirrors old gym's
@@ -141,9 +148,13 @@ class OGBenchLowdimWrapper(gym.Env):
     def render(self, mode="rgb_array"):
         img = self.env.render()
         if img is not None and self.render_hw is not None:
-            import cv2
             h, w = self.render_hw
-            img = cv2.resize(img, (w, h))
+            # Only import cv2 when an actual resize is needed: cv2 is not a
+            # project dependency, and make_async already requests frames at
+            # render_hw (256x256) from OGBench, so this is normally a no-op.
+            if img.shape[:2] != (h, w):
+                import cv2
+                img = cv2.resize(img, (w, h))
         return img
 
     def close(self):

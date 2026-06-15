@@ -7,13 +7,15 @@ _target_: agent.finetune.train_idql_diffusion_agent.TrainIDQLDiffusionAgent
 
 name: ${env_name}_idql_diffusion_mlp_ta${horizon_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/ogbench-finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-base_policy_path: ${oc.env:DPPO_LOG_DIR}/ogbench-pretrain/cube-single_pre_diffusion_mlp_ta8_td20/2026-04-05_21-15-27_42/checkpoint/state_200.pt
-normalization_path: ${oc.env:DPPO_DATA_DIR}/ogbench/cube-single/normalization.npz
+# Fill in after running cfg/ogbench/pretrain/cube-double/pre_diffusion_mlp.yaml
+base_policy_path: /home/melwani/67920/code2/off-policy-rldp-ogbench/log/ogbench-pretrain/cube-double_pre_diffusion_mlp_ta8_td20/2026-06-12_20-11-21_42/checkpoint/state_1300.pt # ${oc.env:DPPO_LOG_DIR}/ogbench-pretrain/cube-double_pre_diffusion_mlp_ta8_td20/REPLACE_WITH_TIMESTAMP/checkpoint/state_3000.pt
+normalization_path: ${oc.env:DPPO_DATA_DIR}/ogbench/cube-double/normalization.npz
 
 seed: 42
 device: cuda:0
-env_name: cube-single-play-singletask-task1-v0
-obs_dim: 28
+# task2 is OGBench's default/representative task for cube envs
+env_name: cube-double-play-singletask-task2-v0
+obs_dim: 37
 action_dim: 5
 denoising_steps: 20
 cond_steps: 1
@@ -24,9 +26,12 @@ env:
   n_envs: 50
   name: ${env_name}
   env_type: ogbench
+  # legacy reward-threshold metric; success_rate is computed from
+  # info["success"] for OGBench (rewards are -2..0, threshold unreachable)
   best_reward_threshold_for_success: 1
-  max_episode_steps: 200
-  save_video: False
+  # equals OGBench's registered TimeLimit for cube-double
+  max_episode_steps: 500
+  save_video: True
   wrappers:
     ogbench_lowdim:
       normalization_path: ${normalization_path}
@@ -38,21 +43,20 @@ env:
 
 wandb:
   entity: ${oc.env:DPPO_WANDB_ENTITY}
-  project: ogbench-cube-single-finetune
+  project: ogbench-cube-double-finetune
   run: ${now:%H-%M-%S}_${name}
 
 train:
-  n_train_itr: 201
-  n_critic_warmup_itr: 5
+  n_train_itr: 2201
+  n_critic_warmup_itr: 35
   # BC warm-up arm switches: explicit here so each experiment arm is a plain
-  # CLI override (previously absent -> trainer silently defaulted to off and
-  # enabling required '+' overrides). When turning on, consider also raising
-  # n_critic_warmup_itr to bc_warmup_iters + 5 (robomimic transport recipe) so
-  # the actor does not train on warmup data while the frozen BC actor is still
-  # the one collecting.
-  use_bc_warmup: False
-  bc_warmup_iters: 0
-  n_steps: 100
+  # CLI override. When turning on, consider also raising n_critic_warmup_itr
+  # to bc_warmup_iters + 5 (robomimic transport recipe) so the actor does not
+  # train on warmup data while the frozen BC actor is still collecting.
+  use_bc_warmup: True
+  bc_warmup_iters: 30
+  # 500-step episodes = 63 chunks of 8; 126 steps = 2 episodes per env per itr
+  n_steps: 126
   gamma: 0.999
   actor_lr: 1e-5
   actor_weight_decay: 0
@@ -69,8 +73,10 @@ train:
   save_model_freq: 100
   val_freq: 10
   render:
-    freq: 1
-    num: 0
+    freq: 50
+    # set > 0 together with env.save_video=True to record and upload videos
+    # of the first `num` envs to wandb every `freq` iterations
+    num: 1
   scale_reward_factor: 1
   eval_deterministic: True
   eval_sample_num: 10
@@ -89,20 +95,17 @@ model:
   min_sampling_denoising_std: 0.1
   randn_clip_value: 3
   # Clip final sampled actions to the normalized action range so the replay
-  # buffer stores what the env actually receives (MuJoCo saturates ctrl
-  # internally, so unclipped commands trained the critic/BC on actions that
-  # differed from the executed ones).
+  # buffer stores what the env actually receives.
   final_action_clip_value: 1.0
   # Single expectile tau, used for BOTH the V expectile loss and the
-  # implicit-policy sampling weights (IDQL paper uses one parameter; the code
-  # previously hardcoded 0.8 for V and 0.7 for sampling).
+  # implicit-policy sampling weights (IDQL paper uses one parameter).
   expectile: 0.7
   network_path: ${base_policy_path}
   # Optional pretrained Q/V critics from
   # agent.pretrain.train_idql_critic_agent (pre_idql_critic_mlp.yaml).
   # null = randomly initialized critics (online-only IDQL); set to a critic
   # checkpoint for the offline-IDQL-pretrained arm.
-  critic_path: null
+  critic_path: /home/melwani/67920/code2/off-policy-rldp-ogbench/log/ogbench-pretrain/cube-double_idql_critic_mlp_ta8/2026-06-13_05-12-21_42/checkpoint/state_250.pt
   actor:
     _target_: model.diffusion.mlp_diffusion.DiffusionMLP
     time_dim: 16

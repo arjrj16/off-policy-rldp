@@ -98,6 +98,11 @@ model:
   # previously hardcoded 0.8 for V and 0.7 for sampling).
   expectile: 0.7
   network_path: ${base_policy_path}
+  # Optional pretrained Q/V critics from
+  # agent.pretrain.train_idql_critic_agent (pre_idql_critic_mlp.yaml).
+  # null = randomly initialized critics (online-only IDQL); set to a critic
+  # checkpoint for the offline-IDQL-pretrained arm.
+  critic_path: null
   actor:
     _target_: model.diffusion.mlp_diffusion.DiffusionMLP
     time_dim: 16

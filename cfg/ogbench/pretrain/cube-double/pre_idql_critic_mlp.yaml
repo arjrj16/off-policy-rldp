@@ -7,14 +7,14 @@ _target_: agent.pretrain.train_idql_critic_agent.TrainIDQLCriticPretrainAgent
 
 name: ${env}_idql_critic_mlp_ta${horizon_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/ogbench-pretrain/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
-# Rewards/masks in train.npz are task-specific (relabeled for scene-play-singletask-task3-v0);
+# Rewards/masks in train.npz are task-specific (relabeled for cube-double-play-singletask-task2-v0);
 # the resulting critics belong to that task only.
-train_dataset_path: ${oc.env:DPPO_DATA_DIR}/ogbench/scene/train.npz
+train_dataset_path: ${oc.env:DPPO_DATA_DIR}/ogbench/cube-double/train.npz
 
 seed: 42
 device: cuda:0
-env: scene
-obs_dim: 40
+env: cube-double
+obs_dim: 37
 action_dim: 5
 denoising_steps: 20
 cond_steps: 1

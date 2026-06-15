@@ -472,6 +472,32 @@ class TrainIDQLDiffusionAgent(TrainAgent):
                 success_rate = 0
                 log.info("[WARNING] No episode completed within the iteration!")
 
+            # Upload this iteration's rendered episodes to wandb. The wrapper
+            # closes each mp4 when its episode ends, so only complete files are
+            # logged; commit=False merges them into this iteration's log step.
+            if (
+                self.use_wandb
+                and self.render_video
+                and self.itr % self.render_freq == 0
+            ):
+                for env_ind in range(self.n_render):
+                    video_path = os.path.join(
+                        self.render_dir, f"itr-{self.itr}_trial-{env_ind}.mp4"
+                    )
+                    if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+                        try:
+                            wandb.log(
+                                {
+                                    f"video/trial-{env_ind}": wandb.Video(
+                                        video_path, format="mp4"
+                                    )
+                                },
+                                step=self.itr,
+                                commit=False,
+                            )
+                        except Exception as e:
+                            log.warning(f"Failed to log video {video_path}: {e}")
+
             # Update models
             if not eval_mode:
                 num_batch = int(

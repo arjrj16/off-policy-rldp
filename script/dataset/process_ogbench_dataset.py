@@ -2,7 +2,7 @@
 Download and convert OGBench singletask datasets into the DPPO NPZ format.
 
 Outputs:
-    {save_dir}/train.npz   — states, actions, rewards, terminals, traj_lengths
+    {save_dir}/train.npz   — states, actions, rewards, terminals, masks, traj_lengths
     {save_dir}/normalization.npz — obs_min, obs_max, action_min, action_max
 
 Usage:
@@ -95,13 +95,19 @@ def load_and_relabel(env_name, dataset_dir=None):
 
 def convert_to_dppo_format(dataset):
     """
-    Convert an OGBench dataset (with next_observations, rewards, terminals)
-    into the stitched DPPO format (states, actions, traj_lengths, rewards, terminals).
+    Convert an OGBench dataset (with next_observations, rewards, terminals,
+    masks) into the stitched DPPO format (states, actions, rewards, terminals,
+    masks, traj_lengths).
     """
     obs = dataset["observations"]
     acts = dataset["actions"]
     rewards = dataset["rewards"]
     terminals = dataset["terminals"]
+    # masks come from OGBench relabeling: 0 where the task is fully solved.
+    # They are the correct TD bootstrap signal for critic pretraining;
+    # `terminals` only mark the ends of the 1000-step play trajectories
+    # (data-collection truncations, NOT task termination).
+    masks = dataset["masks"]
 
     # Reconstruct trajectory boundaries from terminal flags
     terminal_indices = np.where(terminals > 0.5)[0]
@@ -110,6 +116,7 @@ def convert_to_dppo_format(dataset):
     all_actions = []
     all_rewards = []
     all_terminals = []
+    all_masks = []
     traj_lengths = []
 
     prev_end = 0
@@ -121,6 +128,7 @@ def convert_to_dppo_format(dataset):
         all_actions.append(acts[prev_end : term_idx + 1])
         all_rewards.append(rewards[prev_end : term_idx + 1])
         all_terminals.append(terminals[prev_end : term_idx + 1])
+        all_masks.append(masks[prev_end : term_idx + 1])
         prev_end = term_idx + 1
 
     # Handle trailing data without a terminal flag
@@ -131,14 +139,16 @@ def convert_to_dppo_format(dataset):
         all_actions.append(acts[prev_end:])
         all_rewards.append(rewards[prev_end:])
         all_terminals.append(terminals[prev_end:])
+        all_masks.append(masks[prev_end:])
 
     states = np.concatenate(all_states, axis=0)
     actions = np.concatenate(all_actions, axis=0)
     rewards_cat = np.concatenate(all_rewards, axis=0)
     terminals_cat = np.concatenate(all_terminals, axis=0)
+    masks_cat = np.concatenate(all_masks, axis=0)
     traj_lengths = np.array(traj_lengths, dtype=np.int64)
 
-    return states, actions, rewards_cat, terminals_cat, traj_lengths
+    return states, actions, rewards_cat, terminals_cat, masks_cat, traj_lengths
 
 
 def main():
@@ -163,7 +173,7 @@ def main():
         if split not in datasets:
             continue
         ds = datasets[split]
-        states, actions, rewards, terminals, traj_lengths = convert_to_dppo_format(ds)
+        states, actions, rewards, terminals, masks, traj_lengths = convert_to_dppo_format(ds)
 
         print(f"\n--- {split} split ---")
         print(f"  Total transitions: {len(states)}")
@@ -178,6 +188,7 @@ def main():
         print(f"  Action range: [{actions.min():.4f}, {actions.max():.4f}]")
         print(f"  Reward range: [{rewards.min():.4f}, {rewards.max():.4f}]")
         print(f"  Non-zero rewards: {(rewards != 0).sum()}")
+        print(f"  Success steps (mask==0): {(masks < 0.5).sum()}")
 
         if split == "train":
             # Compute normalization stats from training data only
@@ -201,6 +212,7 @@ def main():
             actions=actions.astype(np.float32),
             rewards=rewards.astype(np.float32),
             terminals=terminals.astype(np.float32),
+            masks=masks.astype(np.float32),
             traj_lengths=traj_lengths,
         )
         print(f"  Saved to {out_path}")

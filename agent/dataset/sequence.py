@@ -304,3 +304,122 @@ class StitchedSequenceQLearningDataset(StitchedSequenceDataset):
                 dones,
             )
         return batch
+
+
+class StitchedChunkQLearningDataset(StitchedSequenceDataset):
+    """
+    Q-learning dataset over ACTION CHUNKS, matching the chunked MDP the IDQL
+    fine-tuner trains on: Q(s_t, a_{t:t+H}) with reward = plain sum of the H
+    per-step rewards, next state s_{t+H}, and one gamma applied per chunk.
+    (StitchedSequenceQLearningDataset returns the single-step reward at t and
+    is not consistent with the online critic.)
+
+    Success handling mirrors online collection, where the env terminates at
+    the goal and the chunk loop breaks early: if success occurs at offset j
+    within the chunk, reward sums only steps 0..j and done=1 (no bootstrap,
+    matching value 0 at the goal under OGBench's -n_subtasks..0 rewards).
+
+    Success source: `masks` from the npz when present (OGBench relabeling,
+    mask=0 at success states); otherwise derived as reward > -0.5, which is
+    exact for OGBench singletask rewards (= sum(successes) - n_subtasks, so
+    reward == 0 iff full success).
+    """
+
+    def __init__(
+        self,
+        dataset_path,
+        max_n_episodes=10000,
+        scale_reward_factor=1.0,
+        device="cuda:0",
+        **kwargs,
+    ):
+        if dataset_path.endswith(".npz"):
+            dataset = np.load(dataset_path, allow_pickle=False)
+        else:
+            raise ValueError(f"Unsupported file format: {dataset_path}")
+        traj_lengths = dataset["traj_lengths"][:max_n_episodes]
+        total_num_steps = np.sum(traj_lengths)
+
+        self.scale_reward_factor = scale_reward_factor
+        self.rewards = (
+            torch.from_numpy(dataset["rewards"][:total_num_steps]).float().to(device)
+        )
+        if "masks" in dataset:
+            success = dataset["masks"][:total_num_steps] < 0.5
+        else:
+            log.warning(
+                "No `masks` in dataset; deriving success from reward > -0.5 "
+                "(valid for OGBench singletask reward conventions only)"
+            )
+            success = dataset["rewards"][:total_num_steps] > -0.5
+        self.success = torch.from_numpy(success).bool().to(device)
+        log.info(
+            f"Rewards shape: {self.rewards.shape}, "
+            f"success steps: {int(self.success.sum())}"
+        )
+
+        super().__init__(
+            dataset_path=dataset_path,
+            max_n_episodes=max_n_episodes,
+            device=device,
+            **kwargs,
+        )
+        log.info(f"Total number of chunk transitions: {len(self)}")
+
+    def make_indices(self, traj_lengths, horizon_steps):
+        """
+        Require start + horizon_steps <= traj_end so next_state stays inside
+        the trajectory: OGBench play trajectories end by data-collection
+        truncation (never termination), so the last window of each trajectory
+        has no valid next state and is dropped.
+        """
+        indices = []
+        cur_traj_index = 0
+        for traj_length in traj_lengths:
+            max_start = cur_traj_index + traj_length - horizon_steps - 1
+            indices += [
+                (i, i - cur_traj_index) for i in range(cur_traj_index, max_start + 1)
+            ]
+            cur_traj_index += traj_length
+        return indices
+
+    def __getitem__(self, idx):
+        start, num_before_start = self.indices[idx]
+        end = start + self.horizon_steps
+        states = self.states[(start - num_before_start) : (start + 1)]
+        actions = self.actions[start:end]
+
+        # Chunk reward with early stop at the first success, as online
+        chunk_success = self.success[start:end]
+        chunk_rewards = self.rewards[start:end]
+        if chunk_success.any():
+            first_success = int(torch.argmax(chunk_success.int()))
+            reward = chunk_rewards[: first_success + 1].sum()
+            done = 1.0
+        else:
+            reward = chunk_rewards.sum()
+            done = 0.0
+        rewards = (reward * self.scale_reward_factor).reshape(1)
+        dones = torch.tensor([done], dtype=torch.float32, device=rewards.device)
+
+        # next obs (history) at t + H; unused when done=1 but always in-bounds
+        # because make_indices keeps start + H inside the trajectory
+        next_states_raw = self.states[
+            (start - num_before_start + self.horizon_steps) : (
+                start + 1 + self.horizon_steps
+            )
+        ]
+        states = torch.stack(
+            [
+                states[max(num_before_start - t, 0)]
+                for t in reversed(range(self.cond_steps))
+            ]
+        )
+        next_states = torch.stack(
+            [
+                next_states_raw[max(num_before_start - t, 0)]
+                for t in reversed(range(self.cond_steps))
+            ]
+        )
+        conditions = {"state": states, "next_state": next_states}
+        return Transition(actions, conditions, rewards, dones)

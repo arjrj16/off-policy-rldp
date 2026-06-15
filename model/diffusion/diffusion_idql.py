@@ -29,6 +29,7 @@ class IDQLDiffusion(RWRDiffusion):
         critic_q,
         critic_v,
         expectile=0.7,
+        critic_path=None,
         mask_truncated=False,
         **kwargs,
     ):
@@ -36,6 +37,25 @@ class IDQLDiffusion(RWRDiffusion):
         self.critic_q = critic_q.to(self.device)
         self.target_q = copy.deepcopy(critic_q)
         self.critic_v = critic_v.to(self.device)
+
+        # Optionally load critics pretrained offline by
+        # agent.pretrain.train_idql_critic_agent. This must happen here, after
+        # the critic submodules are registered: network_path (handled by
+        # DiffusionModel.__init__) loads BEFORE they exist, so critic weights
+        # in that checkpoint would be silently dropped by strict=False.
+        if critic_path is not None:
+            checkpoint = torch.load(
+                critic_path, map_location=self.device, weights_only=True
+            )
+            self.critic_q.load_state_dict(checkpoint["critic_q"])
+            self.critic_v.load_state_dict(checkpoint["critic_v"])
+            self.target_q.load_state_dict(
+                checkpoint.get("target_q", checkpoint["critic_q"])
+            )
+            log.info(
+                f"Loaded pretrained critics from {critic_path} "
+                f"(epoch {checkpoint.get('epoch', '?')})"
+            )
 
         # Single expectile tau used BOTH for the V expectile regression and
         # the implicit-policy sampling weights w = |tau - 1(adv < 0)|. The
